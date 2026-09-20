@@ -55,6 +55,8 @@ ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
 OPENCODE_IMAGE="ghcr.io/anomalyco/opencode:latest"
 OPENCODE_CONFIG_MOUNT="/root/.config/opencode"
 
+ICON_ISLAND='🏝️'
+
 # Colors (only when stdout is a terminal).
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -146,6 +148,20 @@ ui_box() {
 step_header() {
   printf '\n'
   ui_box "islet installer - step $1/6" "$2"
+}
+
+# print_greeting — welcome box with the islet island icon in the top border.
+# The icon is 2 terminal cells wide, so it is placed in the border (where the
+# dash count is adjusted for it) instead of inside ui_box's padded lines.
+print_greeting() {
+  local line1='islet installer'
+  local line2='AI agents in isolated Docker containers'
+  local w=${#line2}
+  printf '\n'
+  printf '%s╭─ %s %s╮%s\n' "$C_CYAN" "$ICON_ISLAND" "$(hr $((w - 1)))" "$C_RESET"
+  printf '%s│%s  %-*s  %s│%s\n' "$C_CYAN" "$C_RESET" "$w" "$line1" "$C_CYAN" "$C_RESET"
+  printf '%s│%s  %-*s  %s│%s\n' "$C_CYAN" "$C_RESET" "$w" "$line2" "$C_CYAN" "$C_RESET"
+  printf '%s╰%s╯%s\n' "$C_CYAN" "$(hr $((w + 4)))" "$C_RESET"
 }
 
 # dep_icon <name> — prints the icon for a dependency.
@@ -290,8 +306,7 @@ check_requirements() {
 }
 
 wizard() {
-  printf '\n'
-  ui_box 'islet installer' 'AI agents in isolated Docker containers'
+  print_greeting
 
   check_requirements
 

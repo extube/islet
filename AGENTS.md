@@ -40,6 +40,8 @@ containers. It currently supports
   6. Environment variables (`KEY=VALUE,KEY=VALUE`)
 - Each step is introduced by a boxed TUI header (`ui_box`, `step_header`).
   Box content must be ASCII-only — padding is computed with `${#var}`.
+  The greeting box (`print_greeting`) puts the 🏝️ island icon in the top
+  border instead, where the dash count is adjusted for its 2-cell width.
 - `install.sh --help` — show help.
 
 ## islet-dev.sh

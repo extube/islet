@@ -53,6 +53,13 @@ Config:
   Created by install.sh.
   Override the location with the ISLET_CONFIG_DIR environment variable.
 
+Sessions:
+  Agent sessions and auth are stored in the agent data dir on the host
+  (default ~/.local/share/opencode) and mounted into the container, so
+  they persist across runs even though the container itself is removed
+  on exit (--rm). Resume a previous session from the agent's session
+  list the next time you run it in the same workspace.
+
 Examples:
   $SCRIPT_NAME                       # default agent, current directory
   $SCRIPT_NAME .                     # same as above
@@ -101,18 +108,24 @@ run_agent() {
   fi
 
   local image container_name network agent_config_dir agent_config_mount
+  local agent_data_dir agent_data_mount
   image="$(cfg_get --arg b "$name" '.agent[$b].image')"
   container_name="$(cfg_get --arg b "$name" '.agent[$b].container_name // ""')"
   network="$(cfg_get --arg b "$name" '.agent[$b].network // "host"')"
   agent_config_dir="$(cfg_get --arg b "$name" '.agent[$b].agent_config_dir')"
   agent_config_mount="$(cfg_get --arg b "$name" '.agent[$b].agent_config_mount')"
+  # Sessions and auth live in the agent's data dir — mount it so they
+  # survive the ephemeral (--rm) container.
+  agent_data_dir="$(cfg_get --arg b "$name" '.agent[$b].agent_data_dir // "~/.local/share/opencode"')"
+  agent_data_mount="$(cfg_get --arg b "$name" '.agent[$b].agent_data_mount // "/root/.local/share/opencode"')"
 
   # Expand a leading ~ in host-side paths.
   agent_config_dir="${agent_config_dir/#\~/$HOME}"
+  agent_data_dir="${agent_data_dir/#\~/$HOME}"
 
   [[ -d "$workspace" ]] || die "workspace directory does not exist: $workspace"
   workspace="$(cd "$workspace" && pwd)"
-  mkdir -p "$agent_config_dir"
+  mkdir -p "$agent_config_dir" "$agent_data_dir"
 
   require_cmd docker
 
@@ -140,6 +153,7 @@ run_agent() {
     --workdir /workspace
     --volume "$workspace:/workspace"
     --volume "$agent_config_dir:$agent_config_mount"
+    --volume "$agent_data_dir:$agent_data_mount"
     "$image"
   )
 
