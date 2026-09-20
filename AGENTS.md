@@ -13,23 +13,42 @@ containers. It currently supports
 
 - `islet.sh` — stable script. Runs opencode in Docker with the current (or
   given) directory mounted at `/workspace`.
-- `islet-dev.sh` — development version. Universal, config-driven runner with
-  an interactive initialization wizard. Active development happens here.
+- `install.sh` — installer. Interactive initialization wizard that creates
+  the config file.
+- `islet-dev.sh` — development version. Universal, config-driven runner.
+  Active development happens here.
 - `README.md` — user-facing documentation.
 
-## islet-dev.sh commands
+## install.sh
 
-- `islet-dev.sh` — show help.
-- `islet-dev.sh init` — interactive 6-step wizard:
+- `curl -fsSL <url>/install.sh | sh` — curl-pipeable installer. A POSIX shim
+  at the top re-runs the script with bash: `sh install.sh` re-execs the same
+  file; when piped, the script re-downloads itself (stdin carries the script,
+  so it can't be read for answers) to a temp file and runs it with stdin
+  attached to `/dev/tty` (`/dev/null` when headless). The download URL can be
+  overridden with `ISLET_INSTALL_URL`.
+- Checks requirements first: `jq` (required), `docker` (warns and asks to
+  continue if missing).
+- `install.sh` — run the interactive TUI wizard:
   1. Config folder (default `~/.config/islet`)
-  2. Preinstalled environment — colored checklist (Node.js / Go / Java)
+  2. Preinstalled environment — TUI multi-select with per-dependency icons
+     (↑/↓ or j/k move, Tab/Space toggle, Enter confirm; falls back to
+     numbered toggles when stdin is not a TTY)
   3. opencode config folder (default `~/.config/opencode`)
   4. Container name (empty = random, Docker generates one)
   5. Network: host, or port routing (`<port>:<port>,<port>:<port>`)
   6. Environment variables (`KEY=VALUE,KEY=VALUE`)
-- `islet-dev.sh run [name] [workspace]` — run an agent from config. Arguments
-  are detected by type: an existing directory is the workspace, anything else
-  is the agent name. Order-free; both are optional.
+- Each step is introduced by a boxed TUI header (`ui_box`, `step_header`).
+  Box content must be ASCII-only — padding is computed with `${#var}`.
+- `install.sh --help` — show help.
+
+## islet-dev.sh
+
+- `islet-dev.sh [name] [workspace]` — run an agent from config. No
+  subcommands: running the script directly executes the run scenario.
+  Arguments are detected by type: an existing directory is the workspace,
+  anything else is the agent name. Order-free; both are optional.
+- `islet-dev.sh --help` — show help.
 
 ## Configuration
 
@@ -80,6 +99,11 @@ No test framework yet. Manual testing approach used so far:
   generated command line without running real containers.
 - Isolated `HOME` (e.g. `HOME=/tmp/...`) so `init` doesn't touch real config.
 - Piped stdin to drive the interactive wizard non-interactively.
+- `script -qec '<cmd>' /dev/null` (util-linux) to allocate a pty and test the
+  TUI code paths; feed it paced input (small `sleep`s between keys) — dumping
+  all bytes at once desyncs the escape-sequence reads.
+- `cat install.sh | ISLET_INSTALL_URL="file://$PWD/install.sh" sh` to test
+  the curl-pipe re-exec path locally.
 
 ## Branching
 
