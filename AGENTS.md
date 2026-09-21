@@ -94,7 +94,18 @@ Note: `preinstall` is saved to config but not yet applied to containers
 
 ## Testing
 
-No test framework yet. Manual testing approach used so far:
+`test/run.sh` — framework-free test suite (`bash test/run.sh`):
+
+- Assertion helpers (`check`, `assert_eq`) with pass/fail counters.
+- Syntax-checks all shell scripts (`bash -n`).
+- Drives `install.sh` in isolated `HOME` dirs with piped stdin, verifying the
+  written `config.json` via `jq`: default install, skip-steps CLI flags
+  (`--image`, `--container-name`, ...), overwrite prompt on existing config,
+  and flag validation errors.
+- Note: the piped multichoice fallback consumes one stdin line per exchange
+  (empty line = confirm), so count answer lines to the exact prompt sequence.
+
+Manual testing approach used so far:
 
 - `bash -n <script>` — syntax check.
 - Fake `docker` executable in `PATH` that echoes its arguments, to verify the
