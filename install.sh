@@ -52,6 +52,10 @@ fi
 ISLET_CONFIG_DIR="${ISLET_CONFIG_DIR:-${HOME}/.config/islet}"
 ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
 
+# Flags (set from the command line; a non-empty flag skips its wizard step).
+OPT_CONFIG_DIR='' OPT_PREINSTALL='' OPT_IMAGE='' OPT_AGENT_CONFIG_DIR=''
+OPT_CONTAINER_NAME='' OPT_NETWORK='' OPT_PORTS='' OPT_ENV=''
+
 OPENCODE_IMAGE="ghcr.io/anomalyco/opencode:latest"
 OPENCODE_CONFIG_MOUNT="/root/.config/opencode"
 
@@ -90,13 +94,30 @@ Usage:
 
 The installer:
   0. Checks requirements: docker (warns if missing), jq (required)
-  1. Config folder (default: ~/.config/islet)
+  1. Config folder (default: ~/.config/islet)        --config-dir
   2. Preinstalled environment — multi-select with icons
-     (↑/↓ move, Tab/Space select, Enter confirm)
-  3. opencode config folder (default: ~/.config/opencode)
-  4. Container name (empty = random)
-  5. Network: host, or port routing (<port>:<port>,<port>:<port>)
-  6. Environment variables (KEY=VALUE,KEY=VALUE)
+     (↑/↓ move, Tab/Space select, Enter confirm)     --preinstall
+  3. Docker image (default: ghcr.io/anomalyco/opencode:latest,
+     or enter a custom image name)                   --image
+  4. opencode config folder (default: ~/.config/opencode)
+                                                     --agent-config-dir
+  5. Container name (empty = random)                 --container-name
+  6. Network: host, or port routing                  --network, --ports
+     (<port>:<port>,<port>:<port>)
+  7. Environment variables (KEY=VALUE,KEY=VALUE)     --env
+
+If a flag is given (non-empty), its step is skipped and the flag value is
+saved to the config file. Remaining steps are asked interactively.
+
+Flags:
+  --config-dir DIR        config folder
+  --preinstall LIST       comma-separated dependencies (e.g. Node.js,Go)
+  --image IMAGE           the Docker image to run agents in
+  --agent-config-dir DIR  agent config folder on the host
+  --container-name NAME   Docker container name
+  --network MODE          host or bridge
+  --ports LIST            comma-separated port mappings, e.g. 8080:8080
+  --env LIST              comma-separated KEY=VALUE pairs
 
 Everything is saved to the config file:
   ~/.config/islet/config.json
@@ -147,7 +168,7 @@ ui_box() {
 # step_header <num> <title> — boxed TUI header for a wizard step.
 step_header() {
   printf '\n'
-  ui_box "islet installer - step $1/6" "$2"
+  ui_box "islet installer - step $1/7" "$2"
 }
 
 # print_greeting — welcome box with the islet island icon in the top border.
@@ -306,82 +327,145 @@ check_requirements() {
 }
 
 wizard() {
-  print_greeting
-
-  check_requirements
-
-  # --- Step 1: config folder location --------------------------------------
-  step_header 1 'Config folder'
-  local config_dir
-  config_dir="$(ask 'Config folder' "$ISLET_CONFIG_DIR")"
-  ISLET_CONFIG_DIR="${config_dir/#\~/$HOME}"
-  ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
-  mkdir -p "$ISLET_CONFIG_DIR"
-
+  # Early overwrite check — before any wizard steps.
+  if [[ -n "$OPT_CONFIG_DIR" ]]; then
+    ISLET_CONFIG_DIR="${OPT_CONFIG_DIR/#\~/$HOME}"
+    ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
+  fi
   if [[ -f "$ISLET_CONFIG" ]]; then
+    print_greeting
     local overwrite
     overwrite="$(ask "Config already exists at $ISLET_CONFIG — overwrite? (y/N)" 'N')"
     if [[ ! "$overwrite" =~ ^[Yy]([Ee][Ss])?$ ]]; then
       echo 'Aborted.'
       return 0
     fi
+  else
+    print_greeting
   fi
 
+  check_requirements
+
+  # --- Step 1: config folder location --------------------------------------
+  if [[ -z "$OPT_CONFIG_DIR" ]]; then
+    step_header 1 'Config folder'
+    local config_dir
+    config_dir="$(ask 'Config folder' "$ISLET_CONFIG_DIR")"
+    ISLET_CONFIG_DIR="${config_dir/#\~/$HOME}"
+    ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
+  fi
+  mkdir -p "$ISLET_CONFIG_DIR"
+
   # --- Step 2: preinstalled environment -------------------------------------
-  step_header 2 'Preinstalled environment'
   local -a preinstall=()
-  multichoice preinstall 'Node.js' 'Go' 'Java'
+  if [[ -n "$OPT_PREINSTALL" ]]; then
+    IFS=',' read -r -a preinstall <<< "$OPT_PREINSTALL"
+  else
+    step_header 2 'Preinstalled environment'
+    multichoice preinstall 'Node.js' 'Go' 'Java'
+  fi
 
-  # --- Step 3: opencode config folder ---------------------------------------
-  step_header 3 'opencode config folder'
-  local agent_config_dir
-  agent_config_dir="$(ask 'opencode config folder' '~/.config/opencode')"
-
-  # --- Step 4: container name ------------------------------------------------
-  step_header 4 'Container name'
-  local container_name=''
-  while true; do
-    container_name="$(ask 'Container name (empty for random)')"
-    if [[ -z "$container_name" || "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
-      break
+  # --- Step 3: docker image -------------------------------------------------
+  local image="$OPENCODE_IMAGE"
+  if [[ -n "$OPT_IMAGE" ]]; then
+    image="$OPT_IMAGE"
+  else
+    step_header 3 'Docker image'
+    printf '  %s1)%s default (%s)\n' "$C_GREEN" "$C_RESET" "$OPENCODE_IMAGE"
+    printf '  %s2)%s another image (please enter the name explicitly)\n' "$C_YELLOW" "$C_RESET"
+    local image_choice
+    image_choice="$(ask 'Select' '1')"
+    if [[ "$image_choice" == '2' ]]; then
+      while true; do
+        image="$(ask 'Image (e.g. ghcr.io/owner/agent:tag)')"
+        if [[ -n "$image" && ! "$image" =~ \  ]]; then
+          break
+        fi
+        printf '%sInvalid image name.%s\n' "$C_RED" "$C_RESET" >&2
+      done
     fi
-    printf '%sInvalid name. Use letters, digits, "_", ".", "-" (must start with a letter or digit).%s\n' \
-      "$C_RED" "$C_RESET" >&2
-  done
+  fi
 
-  # --- Step 5: network --------------------------------------------------------
-  step_header 5 'Network'
-  printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
-  printf '  %s2)%s port routing (publish ports)\n' "$C_YELLOW" "$C_RESET"
-  local network='host'
-  local -a ports=()
-  local net_choice ports_input
-  net_choice="$(ask 'Select' '1')"
-  if [[ "$net_choice" == '2' ]]; then
-    network='bridge'
+  # --- Step 4: opencode config folder ---------------------------------------
+  if [[ -n "$OPT_AGENT_CONFIG_DIR" ]]; then
+    local agent_config_dir="$OPT_AGENT_CONFIG_DIR"
+  else
+    step_header 4 'opencode config folder'
+    local agent_config_dir
+    agent_config_dir="$(ask 'opencode config folder' '~/.config/opencode')"
+  fi
+
+  # --- Step 5: container name ------------------------------------------------
+  local container_name=''
+  if [[ -n "$OPT_CONTAINER_NAME" ]]; then
+    container_name="$OPT_CONTAINER_NAME"
+  else
+    step_header 5 'Container name'
     while true; do
-      ports_input="$(ask 'Ports (<port>:<port>,<port>:<port>,...)')"
-      if [[ "$ports_input" =~ ^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$ ]]; then
-        IFS=',' read -r -a ports <<< "$ports_input"
+      container_name="$(ask 'Container name (empty for random)')"
+      if [[ -z "$container_name" || "$container_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
         break
       fi
-      printf '%sInvalid format. Example: 8080:8080,3000:3000%s\n' "$C_RED" "$C_RESET" >&2
+      printf '%sInvalid name. Use letters, digits, "_", ".", "-" (must start with a letter or digit).%s\n' \
+        "$C_RED" "$C_RESET" >&2
     done
   fi
 
-  # --- Step 6: environment variables -------------------------------------------
-  step_header 6 'Environment variables'
-  local -a env_pairs=()
-  local env_input
-  while true; do
-    env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
-    [[ -z "$env_input" ]] && break
-    if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
-      IFS=',' read -r -a env_pairs <<< "$env_input"
-      break
+  # --- Step 6: network --------------------------------------------------------
+  local network='host'
+  local -a ports=()
+  local ports_input
+  if [[ -n "$OPT_PORTS" ]]; then
+    if [[ ! "$OPT_PORTS" =~ ^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$ ]]; then
+      die "--ports must be <port>:<port>,... (e.g. 8080:8080,3000:3000)"
     fi
-    printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
-  done
+    IFS=',' read -r -a ports <<< "$OPT_PORTS"
+    network='bridge'
+  fi
+  if [[ -z "$OPT_NETWORK" ]] && [[ -z "$OPT_PORTS" ]]; then
+    step_header 6 'Network'
+    printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
+    printf '  %s2)%s port routing (publish ports)\n' "$C_YELLOW" "$C_RESET"
+    local net_choice
+    net_choice="$(ask 'Select' '1')"
+    if [[ "$net_choice" == '2' ]]; then
+      network='bridge'
+      while true; do
+        ports_input="$(ask 'Ports (<port>:<port>,<port>:<port>,...)')"
+        if [[ "$ports_input" =~ ^[0-9]+:[0-9]+(,[0-9]+:[0-9]+)*$ ]]; then
+          IFS=',' read -r -a ports <<< "$ports_input"
+          break
+        fi
+        printf '%sInvalid format. Example: 8080:8080,3000:3000%s\n' "$C_RED" "$C_RESET" >&2
+      done
+    fi
+  elif [[ -n "$OPT_NETWORK" ]]; then
+    if [[ "$OPT_NETWORK" != 'host' && "$OPT_NETWORK" != 'bridge' ]]; then
+      die "--network must be 'host' or 'bridge'"
+    fi
+    network="$OPT_NETWORK"
+  fi
+
+  # --- Step 7: environment variables -------------------------------------------
+  local -a env_pairs=()
+  if [[ -n "$OPT_ENV" ]]; then
+    if [[ ! "$OPT_ENV" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
+      die "--env must be KEY=VALUE,KEY=VALUE (e.g. API_KEY=secret,FOO=bar)"
+    fi
+    IFS=',' read -r -a env_pairs <<< "$OPT_ENV"
+  else
+    step_header 7 'Environment variables'
+    local env_input
+    while true; do
+      env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
+      [[ -z "$env_input" ]] && break
+      if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
+        IFS=',' read -r -a env_pairs <<< "$env_input"
+        break
+      fi
+      printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
+    done
+  fi
 
   # --- Save ---------------------------------------------------------------------
   local agent_key="${container_name:-opencode}"
@@ -392,7 +476,7 @@ wizard() {
 
   jq -n \
     --arg container "$agent_key" \
-    --arg image "$OPENCODE_IMAGE" \
+    --arg image "$image" \
     --arg container_name "$container_name" \
     --arg network "$network" \
     --argjson ports "$ports_json" \
@@ -423,17 +507,24 @@ wizard() {
 }
 
 main() {
-  case "${1:-}" in
-    "" )
-      wizard
-      ;;
-    -h|--help|help)
-      print_help
-      ;;
-    *)
-      die "unknown argument: $1 (run '$SCRIPT_NAME --help' for help)"
-      ;;
-  esac
+  local args=()
+  while (($#)); do
+    case "$1" in
+      --config-dir)        OPT_CONFIG_DIR="${2:?}" ; shift 2 ;;
+      --preinstall)        OPT_PREINSTALL="${2:?}" ; shift 2 ;;
+      --image)             OPT_IMAGE="${2:?}" ; shift 2 ;;
+      --agent-config-dir)  OPT_AGENT_CONFIG_DIR="${2:?}" ; shift 2 ;;
+      --container-name)    OPT_CONTAINER_NAME="${2:?}" ; shift 2 ;;
+      --network)           OPT_NETWORK="${2:?}" ; shift 2 ;;
+      --ports)             OPT_PORTS="${2:?}" ; shift 2 ;;
+      --env)               OPT_ENV="${2:?}" ; shift 2 ;;
+      --)                  args+=("${@}") ; break ;;
+      -h|--help|help)      print_help; return 0 ;;
+      -*)                  die "unknown flag: $1 (run '$SCRIPT_NAME --help' for help)" ;;
+      *)                   die "unknown argument: $1 (run '$SCRIPT_NAME --help' for help)" ;;
+    esac
+  done
+  wizard
 }
 
 main "$@"
