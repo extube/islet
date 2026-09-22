@@ -11,12 +11,21 @@ containers. It currently supports
 
 ## Repository layout
 
-- `islet.sh` — stable script. Runs opencode in Docker with the current (or
-  given) directory mounted at `/workspace`.
-- `install.sh` — installer. Interactive initialization wizard that creates
-  the config file.
-- `islet-dev.sh` — development version. Universal, config-driven runner.
-  Active development happens here.
+- `islet.sh` — stable script. Config-driven runner: `islet.sh [name]
+  [workspace]` runs the selected agent (sessions and auth persist on the
+  host), `islet.sh ps` lists running islet containers. `islet.sh rm
+  [name]` removes one agent piece from config.json (empty `$schema`/
+  `container` keys are dropped when it was the last agent); bare
+  `islet.sh rm` uninstalls — after a `y/N` prompt it deletes the config
+  folder and the islet-installed commands (`islet`, `islet-dev`) from
+  `~/.local/bin`.
+- `install.sh` — installer. Interactive initialization wizard; **merges**
+  the configured agent into the existing config (same-name agents get
+  their piece replaced, siblings and the default container are kept) and
+  installs a global `islet` command into `~/.local/bin` (downloaded from
+  the install URL when running piped).
+- `islet-dev.sh` — development version. Universal, config-driven runner
+  with preinstall image baking. Active development happens here.
 - `README.md` — user-facing documentation.
 
 ## install.sh
@@ -32,12 +41,18 @@ containers. It currently supports
 - `install.sh` — run the interactive TUI wizard:
   1. Config folder (default `~/.config/islet`)
   2. Preinstalled environment — TUI multi-select with per-dependency icons
-     (↑/↓ or j/k move, Tab/Space toggle, Enter confirm; falls back to
-     numbered toggles when stdin is not a TTY)
-  3. opencode config folder (default `~/.config/opencode`)
-  4. Container name (empty = random, Docker generates one)
-  5. Network: host, or port routing (`<port>:<port>,<port>:<port>`)
-  6. Environment variables (`KEY=VALUE,KEY=VALUE`)
+     (Node.js/Go/Java/Python/Rust/Ruby/C/C++; ↑/↓ or j/k move, Tab/Space
+     toggle, Enter confirm; falls back to numbered toggles when stdin is
+     not a TTY)
+  3. Docker image (default `ghcr.io/anomalyco/opencode:latest` or custom)
+  4. opencode config folder (default `~/.config/opencode`)
+  5. Container name (empty = random, Docker generates one)
+  6. Network: host, or port routing (`<port>:<port>,<port>:<port>`)
+  7. Environment variables (`KEY=VALUE,KEY=VALUE`)
+  Flags (`--config-dir`, `--preinstall`, `--image`, ...) skip their step.
+  Saving never overwrites the whole config: the agent is written under
+  its key (`<container_name>` or `opencode`) via a jq merge
+  (`.agent[key] = entry`, atomic `tmp`+`mv` write).
 - Each step is introduced by a boxed TUI header (`ui_box`, `step_header`).
   Box content must be ASCII-only — padding is computed with `${#var}`.
   The greeting box (`print_greeting`) puts the 🏝️ island icon in the top
@@ -50,7 +65,10 @@ containers. It currently supports
   subcommands: running the script directly executes the run scenario.
   Arguments are detected by type: an existing directory is the workspace,
   anything else is the agent name. Order-free; both are optional.
-- `islet-dev.sh --help` — show help.
+- `preinstall` deps are baked into a derived image
+  `islet-pre:<agent>-<hash(base image + dep list)>` via `docker build`
+  (apt-get packages per dep); the hash-keyed Docker cache keeps the image
+  across container rebuilds, so deps and `environment` vars persist.
 
 ## Configuration
 
@@ -76,8 +94,8 @@ Stored at `~/.config/islet/config.json` (override location with the
 }
 ```
 
-Note: `preinstall` is saved to config but not yet applied to containers
-(future work: custom image builds).
+Note: `preinstall` is applied by `islet-dev.sh` via derived images (above);
+`islet.sh` still runs the plain configured image.
 
 ## Requirements
 
@@ -100,8 +118,8 @@ Note: `preinstall` is saved to config but not yet applied to containers
 - Syntax-checks all shell scripts (`bash -n`).
 - Drives `install.sh` in isolated `HOME` dirs with piped stdin, verifying the
   written `config.json` via `jq`: default install, skip-steps CLI flags
-  (`--image`, `--container-name`, ...), overwrite prompt on existing config,
-  and flag validation errors.
+  (`--image`, `--container-name`, ...), config merge on existing config
+  (`t_merge`), and flag validation errors.
 - Note: the piped multichoice fallback consumes one stdin line per exchange
   (empty line = confirm), so count answer lines to the exact prompt sequence.
 
