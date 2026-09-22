@@ -40,6 +40,7 @@ islet (dev) — run AI agents in isolated Docker containers
 
 Usage:
   $SCRIPT_NAME [name] [workspace]   Run an agent from config
+  $SCRIPT_NAME ps                   List running islet containers
   $SCRIPT_NAME --help               Show this help message
 
 Arguments:
@@ -69,6 +70,28 @@ EOF
 
 cfg_get() {
   jq -r "$@" "$ISLET_CONFIG"
+}
+
+# run_ps — list running containers of agents configured in config.json.
+run_ps() {
+  require_cmd jq
+  [[ -f "$ISLET_CONFIG" ]] \
+    || die "config not found: $ISLET_CONFIG — run 'install.sh' first"
+
+  local -a names=()
+  mapfile -t names < <(
+    cfg_get '.agent // {} | to_entries[]
+             | (.value.container_name // "" | select(length > 0) // .key)'
+  )
+
+  # docker ps --filter name= accepts a regex; match our containers precisely.
+  if ((${#names[@]} > 0)); then
+    local regex="^($(IFS='|'; echo "${names[*]}"))\$"
+    docker ps --filter "name=$regex" \
+      --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+  else
+    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+  fi
 }
 
 run_agent() {
@@ -168,6 +191,10 @@ main() {
   case "${1:-}" in
     -h|--help|help)
       print_help
+      ;;
+    ps)
+      shift
+      run_ps "$@"
       ;;
     *)
       run_agent "$@"
