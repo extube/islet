@@ -199,7 +199,6 @@ dep_icon() {
     Rust)    printf '🦀' ;;
     Ruby)    printf '💎' ;;
     C/C++)   printf '🔧' ;;
-    Pi)      printf '🥧' ;;
     *)       printf '•' ;;
   esac
 }
@@ -413,22 +412,17 @@ wizard() {
     step_header 3 'Docker image'
     printf '  %s1)%s default (%s)\n' "$C_GREEN" "$C_RESET" "$OPENCODE_IMAGE"
     printf '  %s2)%s another image (please enter the name explicitly)\n' "$C_YELLOW" "$C_RESET"
-    printf '  %s3)%s Pi agent (islet/pi:latest — build: docker build -t islet/pi:latest -f docker/pi.Dockerfile .)\n' \
-      "$C_YELLOW" "$C_RESET"
     local image_choice
     image_choice="$(ask 'Select' '1')"
-    case "$image_choice" in
-      '2')
-        while true; do
-          image="$(ask 'Image (e.g. ghcr.io/owner/agent:tag)')"
-          if [[ -n "$image" && ! "$image" =~ \  ]]; then
-            break
-          fi
-          printf '%sInvalid image name.%s\n' "$C_RED" "$C_RESET" >&2
-        done
-        ;;
-      '3') image='islet/pi:latest' ;;
-    esac
+    if [[ "$image_choice" == '2' ]]; then
+      while true; do
+        image="$(ask 'Image (e.g. ghcr.io/owner/agent:tag)')"
+        if [[ -n "$image" && ! "$image" =~ \  ]]; then
+          break
+        fi
+        printf '%sInvalid image name.%s\n' "$C_RED" "$C_RESET" >&2
+      done
+    fi
   fi
 
   # --- Step 4: opencode config folder ---------------------------------------

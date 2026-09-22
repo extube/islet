@@ -93,7 +93,7 @@ echo "Workspace: $WORKSPACE"
 # installed dependencies stay in place after every container rebuild.
 build_preinstall_image() {
   local pkg hash tag depkey
-  local -a pkgs=() npm_pkgs=()
+  local -a pkgs=()
   for pkg in "${CFG_PREINSTALL[@]}"; do
     case "$pkg" in
       Node.js) pkgs+=(nodejs npm) ;;
@@ -103,11 +103,10 @@ build_preinstall_image() {
       Rust)    pkgs+=(rustc cargo) ;;
       Ruby)    pkgs+=(ruby) ;;
       C/C++)   pkgs+=(build-essential) ;;
-      Pi)      npm_pkgs+=('@earendil-works/pi-coding-agent') ;;
       *)       echo "Warning: unknown preinstall dep '$pkg' — skipped." >&2 ;;
     esac
   done
-  if ((${#pkgs[@]} == 0 && ${#npm_pkgs[@]} == 0)); then
+  if ((${#pkgs[@]} == 0)); then
     printf '%s' "$IMAGE"
     return 0
   fi
@@ -130,13 +129,6 @@ build_preinstall_image() {
         printf ' %s' "$pkg"
       done
       printf ' \\\n  && rm -rf /var/lib/apt/lists/*\n'
-    fi
-    if ((${#npm_pkgs[@]} > 0)); then
-      printf 'RUN npm install -g --ignore-scripts'
-      for pkg in "${npm_pkgs[@]}"; do
-        printf ' %s' "$pkg"
-      done
-      printf '\n'
     fi
   } | docker build -t "$tag" -f - . >/dev/null
 

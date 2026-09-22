@@ -41,6 +41,7 @@ islet (dev) — run AI agents in isolated Docker containers
 Usage:
   $SCRIPT_NAME [name] [workspace]   Run an agent from config
   $SCRIPT_NAME ps                   List running islet containers
+  $SCRIPT_NAME rm [name]            Remove an agent, or uninstall islet
   $SCRIPT_NAME --help               Show this help message
 
 Arguments:
@@ -65,6 +66,8 @@ Examples:
   $SCRIPT_NAME                       # default agent, current directory
   $SCRIPT_NAME .                     # same as above
   $SCRIPT_NAME opencode ~/project    # "opencode" agent, ~/project mounted
+  $SCRIPT_NAME rm opencode           # remove the "opencode" agent entry
+  $SCRIPT_NAME rm                    # uninstall: remove config + islet command
 EOF
 }
 
@@ -92,6 +95,66 @@ run_ps() {
   else
     docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
   fi
+}
+
+# run_rm [name] — remove things islet has installed.
+#   rm <name> — delete only that agent's piece from config.json
+#   rm        — clean everything: the config, and the islet command(s)
+#               installed into ~/.local/bin
+run_rm() {
+  local name="${1:-}"
+
+  if [[ -n "$name" ]]; then
+    # --- remove a single agent entry ---------------------------------------
+    require_cmd jq
+    [[ -f "$ISLET_CONFIG" ]] \
+      || die "config not found: $ISLET_CONFIG — run 'install.sh' first"
+
+    if ! jq -e --arg b "$name" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
+      local available
+      available="$(cfg_get '.agent // {} | keys | join(", ")')"
+      die "unknown agent: $name (available: $available)"
+    fi
+
+    local tmp="${ISLET_CONFIG}.tmp"
+    jq --arg b "$name" '
+      .agent |= delpaths([[$b]])
+      | if (.agent // {}) == {} then del(."$schema", .container, .agent) else . end
+    ' "$ISLET_CONFIG" > "$tmp" && mv "$tmp" "$ISLET_CONFIG"
+    printf '%s✔ Agent %s%s%s removed from %s%s\n' \
+      "$C_GREEN" "$C_BOLD" "$name" "$C_RESET" "$ISLET_CONFIG" "$C_RESET"
+    return 0
+  fi
+
+  # --- full uninstall ------------------------------------------------------
+  require_cmd jq
+  local ans
+  printf '%sRemove the islet config and the installed islet command? (y/N)%s ' \
+    "$C_YELLOW" "$C_RESET" >&2
+  read -r ans || ans=''
+  if [[ ! "$ans" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+    echo 'Aborted.'
+    return 0
+  fi
+
+  # Remove the whole config folder (config.json included).
+  if [[ -f "$ISLET_CONFIG" ]]; then
+    rm -f "$ISLET_CONFIG"
+    rmdir "$ISLET_CONFIG_DIR" 2>/dev/null || true
+  fi
+
+  # Clean all islet commands from ~/.local/bin.
+  local bin_dir="${HOME}/.local/bin"
+  local cmd
+  for cmd in islet islet-dev; do
+    if [[ -f "$bin_dir/$cmd" || -L "$bin_dir/$cmd" ]]; then
+      rm -f "$bin_dir/$cmd"
+      printf '  removed %s\n' "$bin_dir/$cmd" >&2
+    fi
+  done
+
+  printf '%s✔ islet uninstalled%s\n' "$C_GREEN" "$C_RESET"
+  return 0
 }
 
 run_agent() {
@@ -195,6 +258,10 @@ main() {
     ps)
       shift
       run_ps "$@"
+      ;;
+    rm)
+      shift
+      run_rm "$@"
       ;;
     *)
       run_agent "$@"
