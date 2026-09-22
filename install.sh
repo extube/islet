@@ -4,8 +4,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/extube/islet/main/install.sh | sh
 #
 # Interactive TUI wizard that checks requirements (docker, jq) and creates
-# the islet config file used by islet-dev.sh to run AI agent harnesses
-# in Docker containers.
+# the islet config file used by islet.sh (islet-dev.sh) to run AI agent
+# harnesses in Docker containers.
 
 # --- POSIX re-exec shim (must stay POSIX; runs when piped into a shell) ------
 # With `curl ... | sh` stdin carries the script itself, so the wizard cannot
@@ -51,6 +51,9 @@ fi
 
 ISLET_CONFIG_DIR="${ISLET_CONFIG_DIR:-${HOME}/.config/islet}"
 ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
+
+# Source location of install.sh (also used to find/download islet.sh).
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
 
 # Flags (set from the command line; a non-empty flag skips its wizard step).
 OPT_CONFIG_DIR='' OPT_PREINSTALL='' OPT_IMAGE='' OPT_AGENT_CONFIG_DIR=''
@@ -111,7 +114,7 @@ saved to the config file. Remaining steps are asked interactively.
 
 Flags:
   --config-dir DIR        config folder
-  --preinstall LIST       comma-separated dependencies (e.g. Node.js,Go)
+  --preinstall LIST       comma-separated deps (e.g. Node.js,Python,Rust)
   --image IMAGE           the Docker image to run agents in
   --agent-config-dir DIR  agent config folder on the host
   --container-name NAME   Docker container name
@@ -127,8 +130,9 @@ Environment variables:
   ISLET_INSTALL_URL   override the URL used to re-download the script
                       when it is piped into a shell
 
-After installation, run an agent with:
-  islet-dev.sh [name] [workspace]
+After installation, run an agent from anywhere:
+  islet [name] [workspace]      (installed into ~/.local/bin/islet)
+  islet ps                      list running islet containers
 EOF
 }
 
@@ -191,6 +195,11 @@ dep_icon() {
     Node.js) printf '⬢' ;;
     Go)      printf '🐹' ;;
     Java)    printf '☕' ;;
+    Python)  printf '🐍' ;;
+    Rust)    printf '🦀' ;;
+    Ruby)    printf '💎' ;;
+    C/C++)   printf '🔧' ;;
+    Pi)      printf '🥧' ;;
     *)       printf '•' ;;
   esac
 }
@@ -300,6 +309,53 @@ json_env() {
   fi
 }
 
+# install_islet_cmd — put the islet command into ~/.local/bin so it can be
+# run from anywhere in the user's home directory: `islet <workdir>`.
+install_islet_cmd() {
+  local bin_dir="${HOME}/.local/bin"
+  local dst="${bin_dir}/islet"
+  local src_dir src
+
+  if [[ -f "${SCRIPT_SOURCE}" ]]; then
+    src_dir="$(cd -- "$(dirname -- "${SCRIPT_SOURCE}")" && pwd)"
+    src="${src_dir}/islet.sh"
+  else
+    local src_url="${ISLET_INSTALL_URL:-https://raw.githubusercontent.com/extube/islet/main/install.sh}"
+    src_dir="${src_url%install.sh}"
+    src="${src_url%install.sh}islet.sh"
+  fi
+
+  mkdir -p "$bin_dir"
+
+  if [[ -f "$src" ]]; then
+    cp -f "$src" "$dst"
+  else
+    # Src dir does not carry islet.sh (piped install) — download it.
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$src" -o "$dst" \
+        || { printf 'Error: failed to download islet.sh from %s\n' "$src" >&2; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$dst" "$src" \
+        || { printf 'Error: failed to download islet.sh from %s\n' "$src" >&2; return 1; }
+    else
+      printf 'Error: curl or wget required to fetch islet.sh\n' >&2
+      return 1
+    fi
+  fi
+
+  chmod +x "$dst"
+  printf '%s✔ islet command installed at %s%s\n' "$C_GREEN" "$dst" "$C_RESET"
+
+  case ":$PATH:" in
+    *":$bin_dir:"*) ;;
+    *)
+      printf '%sNote:%s %s is not in PATH — add it: export PATH="%s:$PATH"\n' \
+        "$C_YELLOW" "$C_RESET" "$bin_dir" "$bin_dir"
+      ;;
+  esac
+  return 0
+}
+
 # check_requirements — jq is required, docker is strongly recommended.
 check_requirements() {
   require_cmd jq
@@ -327,23 +383,7 @@ check_requirements() {
 }
 
 wizard() {
-  # Early overwrite check — before any wizard steps.
-  if [[ -n "$OPT_CONFIG_DIR" ]]; then
-    ISLET_CONFIG_DIR="${OPT_CONFIG_DIR/#\~/$HOME}"
-    ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
-  fi
-  if [[ -f "$ISLET_CONFIG" ]]; then
-    print_greeting
-    local overwrite
-    overwrite="$(ask "Config already exists at $ISLET_CONFIG — overwrite? (y/N)" 'N')"
-    if [[ ! "$overwrite" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-      echo 'Aborted.'
-      return 0
-    fi
-  else
-    print_greeting
-  fi
-
+  print_greeting
   check_requirements
 
   # --- Step 1: config folder location --------------------------------------
@@ -362,7 +402,7 @@ wizard() {
     IFS=',' read -r -a preinstall <<< "$OPT_PREINSTALL"
   else
     step_header 2 'Preinstalled environment'
-    multichoice preinstall 'Node.js' 'Go' 'Java'
+    multichoice preinstall 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
   fi
 
   # --- Step 3: docker image -------------------------------------------------
@@ -373,17 +413,22 @@ wizard() {
     step_header 3 'Docker image'
     printf '  %s1)%s default (%s)\n' "$C_GREEN" "$C_RESET" "$OPENCODE_IMAGE"
     printf '  %s2)%s another image (please enter the name explicitly)\n' "$C_YELLOW" "$C_RESET"
+    printf '  %s3)%s Pi agent (islet/pi:latest — build: docker build -t islet/pi:latest -f docker/pi.Dockerfile .)\n' \
+      "$C_YELLOW" "$C_RESET"
     local image_choice
     image_choice="$(ask 'Select' '1')"
-    if [[ "$image_choice" == '2' ]]; then
-      while true; do
-        image="$(ask 'Image (e.g. ghcr.io/owner/agent:tag)')"
-        if [[ -n "$image" && ! "$image" =~ \  ]]; then
-          break
-        fi
-        printf '%sInvalid image name.%s\n' "$C_RED" "$C_RESET" >&2
-      done
-    fi
+    case "$image_choice" in
+      '2')
+        while true; do
+          image="$(ask 'Image (e.g. ghcr.io/owner/agent:tag)')"
+          if [[ -n "$image" && ! "$image" =~ \  ]]; then
+            break
+          fi
+          printf '%sInvalid image name.%s\n' "$C_RED" "$C_RESET" >&2
+        done
+        ;;
+      '3') image='islet/pi:latest' ;;
+    esac
   fi
 
   # --- Step 4: opencode config folder ---------------------------------------
@@ -467,15 +512,17 @@ wizard() {
     done
   fi
 
-  # --- Save ---------------------------------------------------------------------
+  # --- Save ---------------------------------------------------------------
+  # Merge into an existing config instead of overwriting it: add the new
+  # agent under its key, replacing only the piece with the same name.
   local agent_key="${container_name:-opencode}"
   local ports_json env_json preinstall_json
   ports_json="$(json_array "${ports[@]}")"
   env_json="$(json_env "${env_pairs[@]}")"
   preinstall_json="$(json_array "${preinstall[@]}")"
 
-  jq -n \
-    --arg container "$agent_key" \
+  local agent_json
+  agent_json="$(jq -n \
     --arg image "$image" \
     --arg container_name "$container_name" \
     --arg network "$network" \
@@ -485,25 +532,38 @@ wizard() {
     --arg agent_config_dir "$agent_config_dir" \
     --arg agent_config_mount "$OPENCODE_CONFIG_MOUNT" \
     '{
-      "$schema": "islet.sh",
-      container: $container,
-      agent: {
-        ($container): {
-          image: $image,
-          container_name: $container_name,
-          network: $network,
-          ports: $ports,
-          environment: $environment,
-          preinstall: $preinstall,
-          agent_config_dir: $agent_config_dir,
-          agent_config_mount: $agent_config_mount
-        }
-      }
-    }' > "$ISLET_CONFIG"
+      image: $image,
+      container_name: $container_name,
+      network: $network,
+      ports: $ports,
+      environment: $environment,
+      preinstall: $preinstall,
+      agent_config_dir: $agent_config_dir,
+      agent_config_mount: $agent_config_mount
+    }')"
+
+  mkdir -p "$ISLET_CONFIG_DIR"
+  local tmp_config="${ISLET_CONFIG}.tmp"
+  local merge_filter
+  merge_filter='
+    .agent = ((.agent // {}) + {($key): $agent})
+    | ."$schema" = (."$schema" // "islet.sh")
+    | .container = (.container // $key)
+  '
+  if [[ -f "$ISLET_CONFIG" ]]; then
+    jq --arg key "$agent_key" --argjson agent "$agent_json" \
+      "$merge_filter" "$ISLET_CONFIG" > "$tmp_config"
+  else
+    jq -n --arg key "$agent_key" --argjson agent "$agent_json" \
+      "$merge_filter" > "$tmp_config"
+  fi
+  mv "$tmp_config" "$ISLET_CONFIG"
 
   printf '\n%s✔ Configuration saved to %s%s\n\n' "$C_GREEN" "$ISLET_CONFIG" "$C_RESET"
-  printf '  %s <workdir>   %s\n' 'islet-dev.sh' '# run agent in this folder'
-  printf '  %s --help      %s\n' 'islet-dev.sh' '# for help'
+  install_islet_cmd || true
+  printf '  %s <workdir>   %s\n' 'islet'        '# run agent in this folder'
+  printf '  %s --help      %s\n' 'islet'        '# for help'
+  printf '  %s ps          %s\n' 'islet'        '# list running agents'
 }
 
 main() {

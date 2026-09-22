@@ -109,25 +109,30 @@ t_flags() {
   rm -rf "$home"
 }
 
-# --- overwrite prompt --------------------------------------------------------
+# --- config merge ------------------------------------------------------------
 
-t_overwrite() {
-  printf 'overwrite prompt on existing config\n'
+t_merge() {
+  printf 'new config merges into existing config\n'
   local home; home="$(mktemp -d)"
   mkdir -p "$home/.config/islet"
-  printf '{}' > "$home/.config/islet/config.json"
+  printf '{"container":"other","agent":{"other":{"network":"host","container_name":"other"}}}' \
+    > "$home/.config/islet/config.json"
 
-  # Answer "n" — must abort and keep the original file.
-  printf 'n\n' | HOME="$home" bash "$ROOT/install.sh" >/dev/null 2>&1
-  check 'decline overwrite aborts, config untouched' \
-    "$([[ "$(cat "$home/.config/islet/config.json")" == '{}' ]]; echo $?)"
+  # A new agent is added; the existing default container stays as-is.
+  # Seek order: docker-missing (y), config folder (skip via flags? no) ...
+  HOME="$home" bash "$ROOT/install.sh" \
+    --container-name agent1 --network bridge </dev/null >/dev/null 2>&1
 
-  # Answer "y" — a full config is written.
-  # Seek order: overwrite (y), docker-missing (y), config folder, preinstall
-  # (skip), image (default), agent config dir, container name, network, env.
-  printf 'y\ny\n\n\n\n\n\n\n\n\n' | HOME="$home" bash "$ROOT/install.sh" >/dev/null 2>&1
-  check 'accept overwrite rewrites config' \
-    "$([[ "$(jq_get "$home/.config/islet/config.json" '.agent.opencode.network')" == 'host' ]]; echo $?)"
+  local cfg="$home/.config/islet/config.json"
+  assert_eq 'agent1 added'      "$(jq_get "$cfg" '.agent.agent1.network')"            'bridge'
+  assert_eq 'sibling kept'      "$(jq_get "$cfg" '.agent.other.network')"             'host'
+  assert_eq 'default kept'      "$(jq_get "$cfg" '.container')"                       'other'
+
+  # Same agent key — only that piece is overwritten.
+  HOME="$home" bash "$ROOT/install.sh" \
+    --container-name agent1 --network host </dev/null >/dev/null 2>&1
+  assert_eq 'same key replaced'  "$(jq_get "$cfg" '.agent.agent1.network')"           'host'
+  assert_eq 'sibling still kept' "$(jq_get "$cfg" '.agent.other.network')"            'host'
   rm -rf "$home"
 }
 
@@ -152,7 +157,7 @@ t_validation() {
 t_syntax
 t_defaults
 t_flags
-t_overwrite
+t_merge
 t_validation
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
