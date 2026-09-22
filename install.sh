@@ -310,18 +310,41 @@ json_env() {
 
 # install_islet_cmd — put the islet command into ~/.local/bin so it can be
 # run from anywhere in the user's home directory: `islet <workdir>`.
+# islet.sh is taken from next to install.sh when available, otherwise it
+# is fetched from the repo URL (ISLET_INSTALL_URL may override it — both
+# file paths and full URLs pointing at install.sh or islet.sh work).
 install_islet_cmd() {
   local bin_dir="${HOME}/.local/bin"
   local dst="${bin_dir}/islet"
-  local src_dir src
+  local src=""
 
-  if [[ -f "${SCRIPT_SOURCE}" ]]; then
-    src_dir="$(cd -- "$(dirname -- "${SCRIPT_SOURCE}")" && pwd)"
-    src="${src_dir}/islet.sh"
-  else
-    local src_url="${ISLET_INSTALL_URL:-https://raw.githubusercontent.com/extube/islet/main/install.sh}"
-    src_dir="${src_url%install.sh}"
-    src="${src_url%install.sh}islet.sh"
+  # 1) A local islet.sh copy: proper sibling next to install.sh, or a
+  #    local file passed via ISLET_INSTALL_URL.
+  local url_path=""
+  if [[ -n "${ISLET_INSTALL_URL:-}" ]]; then
+    url_path="${ISLET_INSTALL_URL/#\~/$HOME}"
+  fi
+  if [[ -f "${SCRIPT_SOURCE}" && "$(basename -- "${SCRIPT_SOURCE}")" == 'install.sh' \
+       && -f "$(cd -- "$(dirname -- "${SCRIPT_SOURCE}")" && pwd)/islet.sh" ]]; then
+    src="$(cd -- "$(dirname -- "${SCRIPT_SOURCE}")" && pwd)/islet.sh"
+  elif [[ -f "$url_path" ]]; then
+    case "$(basename -- "$url_path")" in
+      islet.sh)   src="$url_path" ;;
+      install.sh) src="$(dirname -- "$url_path")/islet.sh" ;;
+      *)          src="$url_path" ;;
+    esac
+  fi
+
+  # 2) Otherwise download it next to the configured install URL.
+  if [[ -z "$src" ]]; then
+    local base="${ISLET_INSTALL_URL:-https://raw.githubusercontent.com/extube/islet/main/install.sh}"
+    case "$base" in
+      */install.sh) base="${base%install.sh}" ;;
+      */islet.sh)   base="${base%islet.sh}" ;;
+      */)           ;;                    # a directory-style URL
+      *)            base="${base%/}/" ;;  # no filename -> treat as dir
+    esac
+    src="${base}islet.sh"
   fi
 
   mkdir -p "$bin_dir"
@@ -329,7 +352,7 @@ install_islet_cmd() {
   if [[ -f "$src" ]]; then
     cp -f "$src" "$dst"
   else
-    # Src dir does not carry islet.sh (piped install) — download it.
+    # Platform-independent download of islet.sh.
     if command -v curl >/dev/null 2>&1; then
       curl -fsSL "$src" -o "$dst" \
         || { printf 'Error: failed to download islet.sh from %s\n' "$src" >&2; return 1; }
