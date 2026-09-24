@@ -37,9 +37,11 @@ RUN apk add --no-cache \
       fd
 
 # Install the opencode binary.
+#   SHELL must be set: the installer expands ${SHELL:?} (unset in the image).
 #   --skip-colors: keep installer output readable in build logs.
 #   --no-modify-path: PATH is set explicitly below.
 # The installer places the binary in /root/.opencode/bin.
+ENV SHELL=/bin/sh
 RUN curl -fsSL https://opencode.ai/install | bash -s -- \
       --no-modify-path ${OPENCODE_VERSION:+--version ${OPENCODE_VERSION}}
 
