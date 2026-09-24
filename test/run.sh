@@ -1,48 +1,44 @@
 #!/usr/bin/env bash
 # test/run.sh — minimal manual test suite for the islet shell scripts.
 #
-# No framework: a small set of assertion helpers plus scenario scripts that
-# drive install.sh in isolated HOME dirs with piped stdin, checking the
-# resulting config.json with jq.
+# No framework: assertion helpers plus scenario scripts that drive install.sh
+# and islet.sh in isolated HOME dirs with piped stdin / a fake docker.
 #
 # Usage: bash test/run.sh
 
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+FAKEBIN="$(mktemp -d)"
+trap 'rm -rf "$FAKEBIN"' EXIT
 
 pass=0 fail=0
 
-# check <description> <condition-result>
 check() {
   local desc="$1" result="$2"
   if [[ "$result" == 0 ]]; then
-    printf '  %sPASS%s %s\n' "$(tput setaf 2 2>/dev/null || true)" '' "$desc" | sed 's/^  PASS/  ✔/'
-    pass=$((pass + 1))
+    printf '  ✔ %s\n' "$desc"; pass=$((pass + 1))
   else
-    printf '  %sFAIL%s %s\n' "$(tput setaf 1 2>/dev/null || true)" '' "$desc" | sed 's/^  FAIL/  ✖/'
-    fail=$((fail + 1))
+    printf '  ✖ %s\n' "$desc"; fail=$((fail + 1))
   fi
 }
 
-# assert_eq <description> <actual> <expected>
 assert_eq() {
   check "$1" "$([[ "$2" == "$3" ]] && echo 0 || echo 1)"
 }
 
-# jq_get <file> <jq-filter> — prints the filtered value.
-jq_get() {
-  jq -r "$2" "$1"
+jq_get() { jq -r "$2" "$1"; }
+
+# fake docker — logs its arguments; use run_x ... FAKE to activate.
+make_fake_docker() {
+  cat > "$FAKEBIN/docker" <<'EOF'
+#!/bin/bash
+echo "docker $*" >> /tmp/islet-fake-docker.log
+EOF
+  chmod +x "$FAKEBIN/docker"
 }
 
-# run_install <home> [args...] — runs the installer with piped stdin.
-# stdin must already contain the wizard answers.
-run_install() {
-  local home="$1"; shift
-  HOME="$home" bash "$ROOT/install.sh" "$@" </dev/null >/dev/null 2>&1
-}
-
-# --- syntax checks -----------------------------------------------------------
+# --- syntax -----------------------------------------------------------------
 
 t_syntax() {
   printf 'syntax\n'
@@ -51,114 +47,154 @@ t_syntax() {
   done
 }
 
-# --- fresh install: defaults via piped answers -------------------------------
+# --- install: requirements + config path + islet command ---------------------
 
-t_defaults() {
-  printf 'fresh install — defaults\n'
+t_install() {
+  printf 'install — minimal installer\n'
   local home; home="$(mktemp -d)"
-  # Order: docker-missing prompt (y), config folder, preinstall (skip),
-  # image (default), agent config dir, container name, network, env.
-  # Seek order: docker-missing (y), config folder (default), preinstall
-  # (skip = empty toggle line), image (default), agent config dir (default),
-  # container name (myagent), network (default host), env (skip).
-  local answers='y\n\n\n\n\nmyagent\n\n\n'
-  printf "$answers" | HOME="$home" bash "$ROOT/install.sh" >/dev/null 2>&1
+  # Prompts: docker-missing (y), islet config folder (default).
+  printf 'y\n\n' | HOME="$home" bash "$ROOT/install.sh" >/dev/null 2>&1
 
   local cfg="$home/.config/islet/config.json"
-  check 'config file created' "$([[ -f "$cfg" ]]; echo $?)"
-  if [[ -f "$cfg" ]]; then
-    assert_eq 'default image' \
-      "$(jq_get "$cfg" '.agent.myagent.image')" \
-      'ghcr.io/anomalyco/opencode:latest'
-    assert_eq 'container name saved' \
-      "$(jq_get "$cfg" '.agent.myagent.container_name')" \
-      'myagent'
-    assert_eq 'default network' \
-      "$(jq_get "$cfg" '.agent.myagent.network')" \
-      'host'
-  fi
+  check 'config created'          "$([[ -f "$cfg" ]]; echo $?)"
+  assert_eq 'config shape'        "$(jq_get "$cfg" '."$schema"')"        'islet.sh'
+  check 'islet command installed' "$([[ -x "$home/.local/bin/islet" ]]; echo $?)"
   rm -rf "$home"
 }
 
-# --- flags skip steps --------------------------------------------------------
-
-t_flags() {
-  printf 'flags skip wizard steps\n'
+t_install_flag() {
+  printf 'install — --config-dir flag\n'
   local home; home="$(mktemp -d)"
-  HOME="$home" bash "$ROOT/install.sh" \
-    --image custom/img:v2 \
-    --container-name agent1 \
-    --network bridge \
-    --ports '8080:8080,3000:3000' \
-    --env 'API_KEY=abc,FOO=bar' \
-    --preinstall 'Node.js,Go' \
-    --agent-config-dir '~/.config/agent' \
-    </dev/null >/dev/null 2>&1
-
-  local cfg="$home/.config/islet/config.json"
-  check 'config file created' "$([[ -f "$cfg" ]]; echo $?)"
-  if [[ -f "$cfg" ]]; then
-    assert_eq 'flag image'        "$(jq_get "$cfg" '.agent.agent1.image')"                'custom/img:v2'
-    assert_eq 'flag container_name' "$(jq_get "$cfg" '.agent.agent1.container_name')"     'agent1'
-    assert_eq 'flag network'      "$(jq_get "$cfg" '.agent.agent1.network')"              'bridge'
-    assert_eq 'flag ports'        "$(jq_get "$cfg" '.agent.agent1.ports[1]')"             '3000:3000'
-    assert_eq 'flag environment'  "$(jq_get "$cfg" '.agent.agent1.environment.API_KEY')"  'abc'
-    assert_eq 'flag preinstall'   "$(jq_get "$cfg" '.agent.agent1.preinstall[1]')"        'Go'
-    assert_eq 'flag agent_config_dir' "$(jq_get "$cfg" '.agent.agent1.agent_config_dir')" '~/.config/agent'
-  fi
+  HOME="$home" bash "$ROOT/install.sh" --config-dir "$home/cfg" >/dev/null 2>&1 </dev/null
+  assert_eq 'config dir respected' \
+    "$([[ -f "$home/cfg/config.json" ]]; echo $?)" '0'
   rm -rf "$home"
 }
 
-# --- config merge ------------------------------------------------------------
+# --- islet create ------------------------------------------------------------
 
-t_merge() {
-  printf 'new config merges into existing config\n'
+t_create() {
+  printf 'islet create — agent + preinstall environment\n'
+  local tmp; tmp="$(mktemp -d)"
+  # Answers: agent (1), preinstall toggle '2 7' (Node.js Ruby), confirm.
+  printf '1\n2 7\n\n' | HOME="$tmp" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
+  check 'opencode.Dockerfile created'  "$([[ -f "$tmp/opencode.Dockerfile" ]]; echo $?)"
+  assert_eq 'alpine base'              "$(grep -m1 '^FROM alpine' "$tmp/opencode.Dockerfile")" 'FROM alpine:latest'
+  check 'preinstall baked (nodejs npm)' \
+    "$(grep -q 'nodejs npm' "$tmp/opencode.Dockerfile" && echo 0 || echo 1)"
+  check 'preinstall baked (ruby)'      "$(grep -q 'ruby' "$tmp/opencode.Dockerfile" && echo 0 || echo 1)"
+
+  # Skip the preinstall list (empty toggle line) -> plain apk line only.
+  printf '3\n\n' | HOME="$tmp" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
+  check 'hermes preinstall skipped' \
+    "$(grep -A1 'apk add' "$tmp/hermes.Dockerfile" | grep -Eq 'nodejs|openjdk|cargo' && echo 1 || echo 0)"
+  # pi with Git preselected.
+  printf '2\n1\n\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
+  assert_eq 'pi base'   "$(grep -m1 '^FROM node:24-alpine' /tmp/pi-test.Dockerfile)" 'FROM node:24-alpine'
+  rm -f /tmp/pi-test.Dockerfile
+  rm -rf "$tmp"
+}
+
+# --- islet build ------------------------------------------------------------
+
+t_build() {
+  printf 'islet build — docker build wrapping\n'
+  local tmp; tmp="$(mktemp -d)"
+  make_fake_docker
+  : > "$tmp/pi.Dockerfile"
+  rm -f /tmp/islet-fake-docker.log
+  HOME="$tmp" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" build "$tmp/pi.Dockerfile" >/dev/null 2>&1
+  assert_eq 'image tag islet/pi:latest' \
+    "$(cat /tmp/islet-fake-docker.log 2>/dev/null)" \
+    'docker build -t islet/pi:latest -f '"$tmp"'/pi.Dockerfile '"$tmp"
+  rm -rf "$tmp"
+}
+
+# --- run agent with the new config schema ------------------------------------
+
+t_run_schema() {
+  printf 'run agent — config.json fields\n'
   local home; home="$(mktemp -d)"
-  mkdir -p "$home/.config/islet"
-  printf '{"container":"other","agent":{"other":{"network":"host","container_name":"other"}}}' \
-    > "$home/.config/islet/config.json"
+  mkdir -p "$home/.config/islet" "$home/ws"
+  cat > "$home/.config/islet/config.json" <<'JSON'
+{
+  "$schema": "islet.sh",
+  "container": "opencode",
+  "agent": {
+    "opencode": {
+      "image": "islet/opencode:latest",
+      "volume_libs": "~/.local/share/islet/opencode-libs",
+      "volume_config": "~/.config/opencode",
+      "network": "bridge",
+      "ports": ["8080:8080"],
+      "environment": { "API_KEY": "abc" }
+    }
+  }
+}
+JSON
+  rm -f /tmp/islet-fake-docker.log
+  make_fake_docker
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" >/dev/null 2>&1
+  local got; got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
+  check 'workspace mounted'    "$(grep -q -- "--volume $home/ws:/workspace" <<<"$got" && echo 0 || echo 1)"
+  check 'agent config volume'  "$(grep -q -- "--volume $home/.config/opencode:/root/.config/opencode" <<<"$got" && echo 0 || echo 1)"
+  check 'libs volume (apk cache)' "$(grep -q -- "--volume $home/.local/share/islet/opencode-libs:/var/cache/apk" <<<"$got" && echo 0 || echo 1)"
+  check 'sessions volume'      "$(grep -q -- "--volume $home/.local/share/islet/opencode-sessions:/root/.local/share/opencode" <<<"$got" && echo 0 || echo 1)"
+  check 'port published'       "$(grep -q -- '--publish 8080:8080' <<<"$got" && echo 0 || echo 1)"
+  check 'env var'              "$(grep -q -- '--env API_KEY=abc' <<<"$got" && echo 0 || echo 1)"
+  check 'image last'           "$(grep -q ' islet/opencode:latest$' <<<"$got" && echo 0 || echo 1)"
 
-  # A new agent is added; the existing default container stays as-is.
-  # Seek order: docker-missing (y), config folder (skip via flags? no) ...
-  HOME="$home" bash "$ROOT/install.sh" \
-    --container-name agent1 --network bridge </dev/null >/dev/null 2>&1
-
-  local cfg="$home/.config/islet/config.json"
-  assert_eq 'agent1 added'      "$(jq_get "$cfg" '.agent.agent1.network')"            'bridge'
-  assert_eq 'sibling kept'      "$(jq_get "$cfg" '.agent.other.network')"             'host'
-  assert_eq 'default kept'      "$(jq_get "$cfg" '.container')"                       'other'
-
-  # Same agent key — only that piece is overwritten.
-  HOME="$home" bash "$ROOT/install.sh" \
-    --container-name agent1 --network host </dev/null >/dev/null 2>&1
-  assert_eq 'same key replaced'  "$(jq_get "$cfg" '.agent.agent1.network')"           'host'
-  assert_eq 'sibling still kept' "$(jq_get "$cfg" '.agent.other.network')"            'host'
+  # rm command with the new schema
+  HOME="$home" bash "$ROOT/islet.sh" rm opencode >/dev/null 2>&1 </dev/null
+  assert_eq 'rm agent' "$(jq_get "$home/.config/islet/config.json" '.agent // "{}"')" '{}'
   rm -rf "$home"
 }
 
-# --- flag validation ----------------------------------------------------------
+# --- islet setup -------------------------------------------------------------
 
-t_validation() {
-  printf 'flag validation\n'
+t_setup() {
+  printf 'islet setup — 5-step wizard into config.json\n'
   local home; home="$(mktemp -d)"
-  local out; out="$(mktemp)"
-  HOME="$home" bash "$ROOT/install.sh" --network warp </dev/null >"$out" 2>&1 || true
-  check '--network rejects bad value' \
-    "$(grep -q "must be 'host' or 'bridge'" "$out" && echo 0 || echo 1)"
-  HOME="$home" bash "$ROOT/install.sh" --ports 'abc' </dev/null >"$out" 2>&1 || true
-  check '--ports rejects bad value' "$(grep -q -- '--ports must be' "$out" && echo 0 || echo 1)"
-  HOME="$home" bash "$ROOT/install.sh" --env 'NOEQUALS' </dev/null >"$out" 2>&1 || true
-  check '--env rejects bad value' "$(grep -q -- '--env must be' "$out" && echo 0 || echo 1)"
-  HOME="$home" bash "$ROOT/install.sh" --bogus </dev/null >"$out" 2>&1 || true
-  check 'unknown flag rejected' "$(grep -q -- 'unknown flag: --bogus' "$out" && echo 0 || echo 1)"
-  rm -rf "$home" "$out"
+  make_fake_docker
+
+  # Answers: name (pi), image, config volume, network (2 = bridge), env.
+  printf 'pi\nimg:pi:2\n\n2\nFOO=2\n' \
+    | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
+  local cfg="$home/.config/islet/config.json"
+  check 'config created'          "$([[ -f "$cfg" ]]; echo $?)"
+  assert_eq 'entry name'          "$(jq_get "$cfg" '.container')"               'pi'
+  assert_eq 'image'               "$(jq_get "$cfg" '.agent.pi.image')"          'img:pi:2'
+  assert_eq 'config volume'       "$(jq_get "$cfg" '.agent.pi.volume_config')"  '~/.config/pi'
+  assert_eq 'libs volume'         "$(jq_get "$cfg" '.agent.pi.volume_libs')"    '~/.local/share/islet/pi-libs'
+  assert_eq 'network'             "$(jq_get "$cfg" '.agent.pi.network')"        'bridge'
+  assert_eq 'environment'         "$(jq_get "$cfg" '.agent.pi.environment.FOO')" '2'
+
+  # Sibling kept on the second setup; same name replaces its own entry.
+  HOME="$home" bash "$ROOT/install.sh" --config-dir "$home/none" >/dev/null 2>&1 </dev/null || true
+  printf 'sib\nsib:img\n\n\n\n' \
+    | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
+  printf 'pi\npi:v2\n\n1\n\n' \
+    | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
+  assert_eq 'sibling kept'        "$(jq_get "$cfg" '.agent.sib.image')"         'sib:img'
+  assert_eq 'entry replaced'      "$(jq_get "$cfg" '.agent.pi.image')"          'pi:v2'
+
+  # Run the saved entry end-to-end (fake docker).
+  mkdir -p "$home/ws"; rm -f /tmp/islet-fake-docker.log
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" pi "$home/ws" >/dev/null 2>&1
+  check 'runs the saved entry' \
+    "$(grep -q -- '--volume '"$home"'/ws:/workspace' /tmp/islet-fake-docker.log 2>/dev/null && \
+      grep -q ' pi:v2$' /tmp/islet-fake-docker.log 2>/dev/null && echo 0 || echo 1)"
+  rm -rf "$home"
 }
+
 
 t_syntax
-t_defaults
-t_flags
-t_merge
-t_validation
+t_install
+t_install_flag
+t_create
+t_build
+t_run_schema
+t_setup
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
-[[ "$fail" -eq 0 ]]
+(( fail == 0 ))
