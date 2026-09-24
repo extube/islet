@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>islet — Run opencode, pi &amp; hermes AI Agents in Isolated Docker Containers 🏝️</title>
+
+<!-- Primary SEO -->
+<meta name="description" content="islet is a free, open-source mini CLI app that runs AI agent harnesses — opencode, pi and hermes — in isolated Docker containers. Persistent sessions, apk cache and per-agent config volumes, host or bridge networking, and a 3-command flow: create, build, setup.">
+<meta name="keywords" content="islet, opencode, pi coding agent, hermes agent, Nous Research hermes, AI agent, Docker, CLI, sandbox, isolated agent environment, run opencode in docker, pi coding agent docker, hermes agent docker, persistent agent sessions, alpine">
+<meta name="author" content="extube">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0b1526">
+<link rel="canonical" href="https://extube.github.io/islet/index.html">
+
+<!-- Open Graph (Facebook / LinkedIn / Slack) -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="islet">
+<meta property="og:url" content="https://extube.github.io/islet/index.html">
+<meta property="og:title" content="islet — AI agents on a private island in Docker">
+<meta property="og:description" content="Run opencode, pi and hermes side by side in isolated Docker containers. One config, persistent sessions and libs, a 3-command setup: create, build, setup.">
+<meta property="og:image" content="https://raw.githubusercontent.com/extube/islet/main/opencode.png">
+<meta property="og:image:alt" content="islet island sticker logo">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="islet — AI agents in isolated Docker containers">
+<meta name="twitter:description" content="Run opencode, pi and hermes in Docker, side by side. Persistent sessions, libs and configs. create → build → setup → islet &lt;agent&gt; ~/project.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/extube/islet/main/opencode.png">
+
+<!-- Favicon (island sticker) -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'&gt;&lt;text y='0.9em' font-size='90'&gt;🏝️&lt;/text&gt;&lt;/svg&gt;">
+
+<!-- Structured data for Google -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "islet",
+  "headline": "islet — AI agents in isolated Docker containers",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux",
+  "description": "A mini CLI app that runs AI agent harnesses (opencode, pi, hermes) in isolated Docker containers with persistent sessions, config and lib volumes.",
+  "softwareRequirements": "bash, docker, jq",
+  "installMethod": "curl -fsSL https://raw.githubusercontent.com/extube/islet/main/install.sh | sh",
+  "author": {"@type": "Person", "name": "extube"},
+  "keywords":"opencode, pi, hermes, docker, agent, sandbox, cli"
+}
+</script>
+<style>
+  :root{
+    --bg:#0b1526; --bg2:#0e1c33; --card:#12213d; --line:#22385e;
+    --text:#dbe6f5; --dim:#8fa4c2; --cyan:#5cd7e8; --green:#7ee8a2;
+    --yellow:#f5d67e; --red:#f2878a; --mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:radial-gradient(1200px 600px at 50% -10%,#17335c 0%,var(--bg) 55%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+  header{padding:70px 0 30px;text-align:center}
+  .logo{font-size:88px;display:inline-block;filter:drop-shadow(0 6px 18px rgba(87,213,236,.35));transition:transform .3s}
+  .logo:hover{transform:rotate(-8deg) scale(1.1)}
+  h1{font-size:2.6rem;letter-spacing:.5px;margin-top:10px}
+  h1 span{color:var(--cyan)}
+  .tag{color:var(--dim);max-width:640px;margin:14px auto 26px;font-size:1.05rem}
+  .badges{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+  .badge{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:4px 14px;font-size:.85rem;color:var(--dim)}
+  .badge b{color:var(--green);font-weight:600}
+  section{padding:48px 0}
+  h2{font-size:1.5rem;margin-bottom:20px;color:var(--cyan)}
+  h2::before{content:'▸ ';color:var(--green)}
+  pre{background:#0a1220;border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:.92rem;line-height:1.7}
+  pre .c{color:#5a7397}
+  pre .p{color:var(--green)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .card h3{color:var(--yellow);font-size:1.05rem;margin-bottom:8px}
+  .card p{color:var(--dim);font-size:.95rem}
+  .card .icon{font-size:1.8rem;display:block;margin-bottom:8px}
+  table{width:100%;border-collapse:collapse;font-size:.92rem}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--cyan);font-weight:600}
+  td{font-family:var(--mono);color:var(--text)}
+  .note{border-left:3px solid var(--yellow);background:var(--card);border-radius:8px;padding:12px 16px;color:var(--dim);font-size:.9rem;margin-top:16px}
+  footer{padding:40px 0 60px;text-align:center;color:var(--dim);font-size:.9rem}
+  footer .logo{font-size:32px;vertical-align:middle;margin-right:8px}
+  code{background:#0a1220;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-family:var(--mono);font-size:.88em;color:var(--cyan)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav aria-label="Sections" style="text-align:center;padding:16px 0;font-size:.9rem">
+    <a href="#install" style="color:var(--cyan);margin:0 10px">Installation</a>
+    <a href="#agents" style="color:var(--cyan);margin:0 10px">Why islet</a>
+    <a href="#security" style="color:var(--cyan);margin:0 10px">Security</a>
+    <a href="#usage" style="color:var(--cyan);margin:0 10px">Getting&nbsp;started</a>
+    <a href="#matrix" style="color:var(--cyan);margin:0 10px">Agent&nbsp;support</a>
+  </nav>
+
+  <header>
+    <span class="logo" role="img" aria-label="island sticker logo of the islet CLI">🏝️</span>
+    <h1><span>islet</span> — run opencode, pi &amp; hermes on your private AI-agent island in Docker</h1>
+    <p class="tag">A free, open-source mini CLI app that runs AI agent harnesses in isolated Docker containers.
+    One island per agent: <b>opencode</b>, <b>pi</b> and <b>hermes</b> coexist side by side — separate configs, persistent sessions, zero conflicts.</p>
+    <div class="badges">
+      <span class="badge">🧩 <b>3 agents</b> side by side</span>
+      <span class="badge">🐳 Docker-isolated</span>
+      <span class="badge">💾 sessions &amp; libs persisted</span>
+      <span class="badge">⌨️ one binary: islet</span>
+    </div>
+  </header>
+
+  <section id="install" aria-labelledby="install-h">
+    <h2 id="install-h">Installation — how to install islet</h2>
+    <pre><span class="c"># One-shot install: checks jq/docker, creates the config,</span>
+<span class="c"># and installs the "islet" command into ~/.local/bin</span>
+<span class="p">curl -fsSL https://raw.githubusercontent.com/extube/islet/main/install.sh | sh</span>
+
+<span class="c"># if you already have the repo:</span>
+<span class="p">./install.sh</span></pre>
+    <div class="note">The installer only asks for the config folder (default <code>~/.config/islet</code>, override with <code>ISLET_CONFIG_DIR</code>), checks <code>jq</code> and <code>docker</code>, and puts the <code>islet</code> command on your PATH.</div>
+  </section>
+
+  <section id="agents" aria-labelledby="agents-h">
+    <h2 id="agents-h">Why islet is good for running opencode, pi and hermes together</h2>
+    <div class="grid">
+      <div class="card">
+        <span class="icon">🧩</span>
+        <h3>One config, many agents</h3>
+        <p>Every agent gets its own entry in <code>config.json</code>: its image, its volumes, its network. opencode stays opencode, pi stays pi, hermes stays hermes — and each has exactly its own dependencies baked into its image.</p>
+      </div>
+      <div class="card">
+        <span class="icon">↔️</span>
+        <h3>Zero conflicts</h3>
+        <p>Agents never see each other's config, sessions or installed libraries: config at <code>~/.config/&lt;agent&gt;</code>, sessions at <code>~/.local/share/islet/&lt;agent&gt;-sessions</code>, apk libs cache at <code>~/.local/share/islet/&lt;agent&gt;-libs</code>. Update one — the others are untouched.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🔋</span>
+        <h3>Survives restarts</h3>
+        <p>Containers are ephemeral (<code>--rm</code>); everything valuable lives on the host: agent config, saved sessions/auth, the installed-libs cache. Restart or refresh Docker and you continue right where you left off.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🛠️</span>
+        <h3>Same command for everyone</h3>
+        <p><code>islet opencode ~/project</code>, <code>islet pi ~/project</code>, <code>islet hermes ~/project</code> — the same interface for every harness: the agent runs in your directory under <code>/workspace</code> with a TTY, removed automatically on exit.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🎛️</span>
+        <h3>Isolated network &amp; env</h3>
+        <p><code>host</code> or <code>bridge</code> network with published ports and an env-variables map (<code>API_KEY</code> etc.) per agent — e.g. hermes gets its key, opencode gets a different one, and they never overlap.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🌊</span>
+        <h3>3 commands to a new island</h3>
+        <p><code>islet create</code> → Dockerfile (with a choice of agent + preinstall environment), <code>islet build</code> → the image, <code>islet setup</code> → the entry in config.json. That's it:</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="security" aria-labelledby="security-h">
+    <h2 id="security-h">Why run an agent in a container — the security side</h2>
+    <p class="tag" style="margin-top:0">An AI agent is an autonomous shell executor: it writes and runs code that no human fully reviewed, guided by a model that can follow prompt-injection instructions from raw files. That belongs behind a wall.</p>
+    <div class="grid">
+      <div class="card">
+        <span class="icon">🚧</span>
+        <h3>Only your workspace exists</h3>
+        <p>The agent mounts exactly one host directory at <code>/workspace</code>. It can't see your documents, your browser profile, SSH keys — only what you handed over.</p>
+      </div>
+      <div class="card">
+        <span class="icon">💣</span>
+        <h3>Dangerous commands become harmless</h3>
+        <p><code>rm -rf</code>, broken <code>curl | sh</code> scripts, experiments with <code>dd</code> — they all happen on an ephemeral container filesystem that is removed on exit. The worst case is a rebuild, not a destroyed machine.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🧬</span>
+        <h3>Prompt injection containment</h3>
+        <p>Agents read a lot: README files, web pages, issues, code. A malicious file can try to steer the agent into leaking data. Inside a container, its total filesystem footprint is what you mounted — nothing more.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🔑</span>
+        <h3>Secrets, scoped per agent</h3>
+        <p>API keys pass in via per-agent <code>environment</code> maps and are stored in that agent's mount points. Your shell history, <code>~/.ssh</code>, <code>~/.aws</code> and global env vars are never inside the container.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🌊</span>
+        <h3>Network you control</h3>
+        <p><code>bridge</code> mode with explicit published ports keeps the container off your host network; <code>host</code> mode is an opt-in, per agent. A runaway download or server can't touch your LAN silently.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🧾</span>
+        <h3>Small, auditable surface</h3>
+        <p>Each agent island is built from a Dockerfile you can read in one screen: Alpine base, a fixed package list, one installer. No opaque "autoconfigured" runtime, no leftover state from previous runs.</p>
+      </div>
+    </div>
+    <div class="note">Still practice good hygiene: run <code>docker</code> as root/sudo is expected (islet calls the docker CLI), revisit what's published, and treat any agent — however helpful — as an untrusted program that writes code. islet just makes the blast radius a round corner of the internet: an island. 🏝️</div>
+  </section>
+
+  <section id="usage" aria-labelledby="usage-h">
+    <h2 id="usage-h">Getting started — create, build, setup, run in Docker</h2>
+    <pre><span class="c"># 1. create a Dockerfile (choose the agent + preinstall env)</span>
+<span class="p">islet create</span> ~/my-agents/opencode.Dockerfile
+
+<span class="c"># 2. build it -&gt; image: islet/opencode:latest</span>
+<span class="p">islet build</span> ~/my-agents/opencode.Dockerfile
+
+<span class="c"># 3. register the agent in config.json (5-step wizard)</span>
+<span class="p">islet setup</span>
+
+<span class="c"># 4. run — both agents, two different projects, right away:</span>
+<span class="p">islet</span> opencode ~/project &
+<span class="p">islet</span> pi ~/other-project &
+<span class="p">islet</span> hermes ~/third-project &
+
+<span class="c"># list running agents / remove one / uninstall</span>
+<span class="p">islet</span> ps
+<span class="p">islet</span> rm opencode
+<span class="p">islet</span> rm</pre>
+  </section>
+
+  <section id="matrix" aria-labelledby="matrix-h">
+    <h2 id="matrix-h">Agent support — opencode, pi, hermes in Docker</h2>
+    <table>
+      <tr><th>Agent</th><th>Base image</th><th>Install</th><th>Config volume</th></tr>
+      <tr><td><span class="logo" style="font-size:18px">🧭</span> opencode</td><td>alpine:latest</td><td>opencode.ai/install</td><td>~/.config/opencode</td></tr>
+      <tr><td><span class="logo" style="font-size:18px">🥮</span> pi</td><td>node:24-alpine</td><td>npm @earendil-works/pi-coding-agent</td><td>~/.config/pi</td></tr>
+      <tr><td><span class="logo" style="font-size:18px">🔥</span> hermes</td><td>alpine:latest</td><td>hermes-agent.nousresearch.com</td><td>~/.config/hermes</td></tr>
+    </table>
+    <div class="note">Requirements: bash, docker, jq (checked and reported by the installer). All agents share the same simple config contract — adding the fourth wheel later is trivial.</div>
+  </section>
+
+  <footer>
+    <span class="logo">🏝️</span> islet — <a href="https://github.com/extube/islet" rel="noopener" style="color:var(--cyan)">open-source</a> CLI for running opencode, pi and hermes AI agents in isolated Docker containers. <br>
+    <code>bash test/run.sh</code> runs the suite (33 checks) before you sail.
+  </footer>
+
+</div>
+</body>
+</html>
