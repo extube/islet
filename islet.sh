@@ -89,15 +89,18 @@ cfg_get() {
 # run_ps — list running containers of agents configured in config.json.
 run_ps() {
   require_cmd jq
-  [[ -f "$ISLET_CONFIG" ]] \
-    || die "config not found: $ISLET_CONFIG — run 'install.sh' first"
+  [[ -f "$ISLET_CONFIG" ]] ||
+    die "config not found: $ISLET_CONFIG — run 'install.sh' first"
 
   local -a names=()
   mapfile -t names < <(cfg_get '.agent // {} | to_entries[] | .key')
 
   # docker ps --filter name= accepts a regex; match our containers precisely.
   if ((${#names[@]} > 0)); then
-    local regex="^($(IFS='|'; echo "${names[*]}"))\$"
+    local regex="^($(
+      IFS='|'
+      echo "${names[*]}"
+    ))\$"
     docker ps --filter "name=$regex" \
       --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
   else
@@ -115,8 +118,8 @@ run_rm() {
   if [[ -n "$name" ]]; then
     # --- remove a single agent entry ---------------------------------------
     require_cmd jq
-    [[ -f "$ISLET_CONFIG" ]] \
-      || die "config not found: $ISLET_CONFIG — run 'install.sh' first"
+    [[ -f "$ISLET_CONFIG" ]] ||
+      die "config not found: $ISLET_CONFIG — run 'install.sh' first"
 
     if ! jq -e --arg b "$name" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
       local available
@@ -128,7 +131,7 @@ run_rm() {
     jq --arg b "$name" '
       .agent |= delpaths([[$b]])
       | if (.agent // {}) == {} then del(."$schema", .container, .agent) else . end
-    ' "$ISLET_CONFIG" > "$tmp" && mv "$tmp" "$ISLET_CONFIG"
+    ' "$ISLET_CONFIG" >"$tmp" && mv "$tmp" "$ISLET_CONFIG"
     printf '%s✔ Agent %s%s%s removed from %s%s\n' \
       "$C_GREEN" "$C_BOLD" "$name" "$C_RESET" "$ISLET_CONFIG" "$C_RESET"
     return 0
@@ -183,11 +186,11 @@ run_agent() {
   workspace="${workspace:-$PWD}"
 
   require_cmd jq
-  [[ -f "$ISLET_CONFIG" ]] \
-    || die "config not found: $ISLET_CONFIG — run 'install.sh' first"
+  [[ -f "$ISLET_CONFIG" ]] ||
+    die "config not found: $ISLET_CONFIG — run 'install.sh' first"
 
-  jq -e '."$schema" and .agent' "$ISLET_CONFIG" >/dev/null \
-    || die "invalid config format: $ISLET_CONFIG — run 'install.sh' to recreate it"
+  jq -e '."$schema" and .agent' "$ISLET_CONFIG" >/dev/null ||
+    die "invalid config format: $ISLET_CONFIG — run 'install.sh' to recreate it"
 
   # Resolve agent name: argument, or the default container from config.
   if [[ -z "$name" ]]; then
@@ -302,14 +305,14 @@ step_header() {
 # dep_icon <dep> — icon shown for each preinstall environment entry.
 dep_icon() {
   case "$1" in
-    Node.js) printf '⬢' ;;
-    Go)      printf '🐹' ;;
-    Java)    printf '☕' ;;
-    Python)  printf '🐍' ;;
-    Rust)    printf '🦀' ;;
-    Ruby)    printf '💎' ;;
-    C/C++)   printf '🔧' ;;
-    *)       printf '•' ;;
+  Node.js) printf '⬢' ;;
+  Go) printf '🐹' ;;
+  Java) printf '☕' ;;
+  Python) printf '🐍' ;;
+  Rust) printf '🦀' ;;
+  Ruby) printf '💎' ;;
+  C/C++) printf '🔧' ;;
+  *) printf '•' ;;
   esac
 }
 
@@ -318,7 +321,8 @@ dep_icon() {
 # is not a TTY this falls back to numbered toggles: one line per exchange,
 # space-separated numbers toggle items, an empty line confirms.
 multichoice() {
-  local -n _out=$1; shift
+  local -n _out=$1
+  shift
   local items=("$@")
   local -a state=()
   local i n input cur=0 key
@@ -327,7 +331,7 @@ multichoice() {
   if [[ -t 0 && -t 2 ]]; then
     # --- interactive TUI ---------------------------------------------------
     printf '%s↑/↓ move · Tab select · Enter confirm%s\n' "$C_DIM" "$C_RESET" >&2
-    printf '\033[?25l' >&2   # hide cursor
+    printf '\033[?25l' >&2 # hide cursor
     trap 'printf "\033[?25h" >&2; exit 130' INT
 
     while true; do
@@ -350,21 +354,21 @@ multichoice() {
         IFS= read -rsn1 -t 0.05 k2 || true
         IFS= read -rsn1 -t 0.05 k3 || true
         case "$k2$k3" in
-          '[A') key='up' ;;
-          '[B') key='down' ;;
-          *)    key='ignore' ;;
+        '[A') key='up' ;;
+        '[B') key='down' ;;
+        *) key='ignore' ;;
         esac
       fi
       case "$key" in
-        up|k)      cur=$(( (cur - 1 + ${#items[@]}) % ${#items[@]} )) ;;
-        down|j)    cur=$(( (cur + 1) % ${#items[@]} )) ;;
-        $'\t'|' ') state[cur]=$((1 - state[cur])) ;;
-        ''|$'\r')  break ;;   # Enter
+      up | k) cur=$(((cur - 1 + ${#items[@]}) % ${#items[@]})) ;;
+      down | j) cur=$(((cur + 1) % ${#items[@]})) ;;
+      $'\t' | ' ') state[cur]=$((1 - state[cur])) ;;
+      '' | $'\r') break ;; # Enter
       esac
-      printf '\033[%dA' "${#items[@]}" >&2   # move cursor up to redraw
+      printf '\033[%dA' "${#items[@]}" >&2 # move cursor up to redraw
     done
 
-    printf '\033[?25h' >&2   # show cursor
+    printf '\033[?25h' >&2 # show cursor
     trap - INT
   else
     # --- plain fallback (piped stdin, CI) ----------------------------------
@@ -405,14 +409,14 @@ preinstall_pkgs() {
   local out='' dep
   for dep in "$@"; do
     case "$dep" in
-      Node.js) out+=' nodejs npm' ;;
-      Go)      out+=' go' ;;
-      Java)    out+=' openjdk17' ;;
-      Python)  out+=' python3' ;;
-      Rust)    out+=' cargo rust' ;;
-      Ruby)    out+=' ruby' ;;
-      C/C++)   out+=' build-base' ;;
-      Git)     out+=' git' ;;
+    Node.js) out+=' nodejs npm' ;;
+    Go) out+=' go' ;;
+    Java) out+=' openjdk17' ;;
+    Python) out+=' python3' ;;
+    Rust) out+=' cargo rust' ;;
+    Ruby) out+=' ruby' ;;
+    C/C++) out+=' build-base' ;;
+    Git) out+=' git' ;;
     esac
   done
   printf '%s' "${out# }"
@@ -427,8 +431,8 @@ dockerfile_for() {
   extra_pkgs="$(preinstall_pkgs "${@:2}")"
 
   case "$agent" in
-    opencode)
-      cat <<EOF
+  opencode)
+    cat <<EOF
 # opencode agent harness — Alpine, runtime setup baked at build time.
 FROM alpine:latest
 
@@ -447,9 +451,9 @@ WORKDIR /workspace
 
 ENTRYPOINT ["opencode"]
 EOF
-      ;;
-    pi)
-      cat <<EOF
+    ;;
+  pi)
+    cat <<EOF
 # pi coding agent — Alpine, Node.js runtime.
 FROM node:24-alpine
 
@@ -462,9 +466,9 @@ WORKDIR /workspace
 
 ENTRYPOINT ["pi"]
 EOF
-      ;;
-    hermes)
-      cat <<EOF
+    ;;
+  hermes)
+    cat <<EOF
 # hermes agent harness (Nous Research) — Alpine, runtime install.
 FROM alpine:latest
 
@@ -480,8 +484,8 @@ WORKDIR /workspace
 
 ENTRYPOINT ["hermes"]
 EOF
-      ;;
-    *) die "unsupported agent: $agent (supported: opencode, pi, hermes)" ;;
+    ;;
+  *) die "unsupported agent: $agent (supported: opencode, pi, hermes)" ;;
   esac
 }
 
@@ -505,10 +509,10 @@ run_create() {
   local choice
   choice="$(ask 'Select agent' '1')"
   case "$choice" in
-    1) agent='opencode' ;;
-    2) agent='pi' ;;
-    3) agent='hermes' ;;
-    *) die "invalid choice: $choice" ;;
+  1) agent='opencode' ;;
+  2) agent='pi' ;;
+  3) agent='hermes' ;;
+  *) die "invalid choice: $choice" ;;
   esac
 
   printf '%sStep 2: preinstall environment%s\n' "$C_BOLD" "$C_RESET" >&2
@@ -525,7 +529,7 @@ run_create() {
   fi
 
   mkdir -p "$(cd "$(dirname "$file")" && pwd)"
-  dockerfile_for "$agent" "${preinstall[@]}" > "$file"
+  dockerfile_for "$agent" "${preinstall[@]}" >"$file"
   printf '%s✔ Dockerfile written to %s%s\n' "$C_GREEN" "$file" "$C_RESET"
   ((${#preinstall[@]})) && printf '  preinstall: %s\n' "${preinstall[*]}"
   printf '  next: %s build %s\n' "$SCRIPT_NAME" "$file"
@@ -581,8 +585,8 @@ run_setup() {
   local network
   printf -v network '%s' "$(ask 'Select' '1')"
   case "$network" in
-    2) network='bridge' ;;
-    *) network='host' ;;
+  2) network='bridge' ;;
+  *) network='host' ;;
   esac
 
   step_header 5 'Environment variables'
@@ -592,7 +596,7 @@ run_setup() {
     env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
     [[ -z "$env_input" ]] && break
     if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
-      IFS=',' read -r -a env_pairs <<< "$env_input"
+      IFS=',' read -r -a env_pairs <<<"$env_input"
       break
     fi
     printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
@@ -600,11 +604,11 @@ run_setup() {
 
   # --- save into config.json (merge; sibling agents are kept) --------------
   mkdir -p "$(dirname "$ISLET_CONFIG")"
-  [[ -f "$ISLET_CONFIG" ]] || jq -n '{"$schema": "islet.sh"}' > "$ISLET_CONFIG"
+  [[ -f "$ISLET_CONFIG" ]] || jq -n '{"$schema": "islet.sh"}' >"$ISLET_CONFIG"
   local env_json volume_libs
   if ((${#env_pairs[@]} > 0)); then
-    env_json="$(printf '%s\n' "${env_pairs[@]}" \
-      | jq -R 'split("=") | {(.[0]): .[1]}' | jq -s 'add // {}')"
+    env_json="$(printf '%s\n' "${env_pairs[@]}" |
+      jq -R 'split("=") | {(.[0]): .[1]}' | jq -s 'add // {}')"
   else
     env_json='{}'
   fi
@@ -634,8 +638,8 @@ run_setup() {
   '
   local tmp_json="${ISLET_CONFIG}.tmp"
   jq --arg key "$name" --argjson agent "$agent_json" \
-     "$merge_filter" "$ISLET_CONFIG" > "$tmp_json" \
-    || die "invalid config format: $ISLET_CONFIG"
+    "$merge_filter" "$ISLET_CONFIG" >"$tmp_json" ||
+    die "invalid config format: $ISLET_CONFIG"
   mv "$tmp_json" "$ISLET_CONFIG"
 
   printf '%s✔ Agent %s%s%s saved to %s%s\n' \
@@ -646,32 +650,32 @@ run_setup() {
 
 main() {
   case "${1:-}" in
-    -h|--help|help)
-      print_help
-      ;;
-    create)
-      shift
-      run_create "$@"
-      ;;
-    build)
-      shift
-      run_build "$@"
-      ;;
-    setup)
-      shift
-      run_setup "$@"
-      ;;
-    ps)
-      shift
-      run_ps "$@"
-      ;;
-    rm)
-      shift
-      run_rm "$@"
-      ;;
-    *)
-      run_agent "$@"
-      ;;
+  -h | --help | help)
+    print_help
+    ;;
+  create)
+    shift
+    run_create "$@"
+    ;;
+  build)
+    shift
+    run_build "$@"
+    ;;
+  setup)
+    shift
+    run_setup "$@"
+    ;;
+  ps)
+    shift
+    run_ps "$@"
+    ;;
+  rm)
+    shift
+    run_rm "$@"
+    ;;
+  *)
+    run_agent "$@"
+    ;;
   esac
 }
 
