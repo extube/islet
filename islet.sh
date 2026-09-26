@@ -227,6 +227,27 @@ run_agent() {
   workspace="$(cd "$workspace" && pwd)"
   mkdir -p "$volume_libs" "$volume_config" "$volume_sessions"
 
+  # In-container paths of the agent's config and data dirs. They must match
+  # what the agent itself reads — not the config entry name: an agent named
+  # e.g. "my-agent" still reads its config from /root/.config/opencode.
+  local run_config_dir run_data_dir
+  local agent_kind
+  agent_kind="$(cfg_get --arg b "$name" '.agent[$b].agent // ""')"
+  if [[ -z "$agent_kind" ]]; then
+    case "$image" in
+      *opencode*) agent_kind='opencode' ;;
+      *pi*) agent_kind='pi' ;;
+      *hermes*) agent_kind='hermes' ;;
+      *) agent_kind="$name" ;;
+    esac
+  fi
+  case "$agent_kind" in
+  opencode) run_config_dir='/root/.config/opencode'; run_data_dir='/root/.local/share/opencode' ;;
+  pi) run_config_dir='/root/.config/pi'; run_data_dir='/root/.local/share/pi' ;;
+  hermes) run_config_dir='/root/.config/hermes'; run_data_dir='/root/.local/share/hermes' ;;
+  *) run_config_dir="/root/.config/${name}"; run_data_dir="/root/.local/share/${name}" ;;
+  esac
+
   require_cmd docker
 
   # Build the docker command line.
@@ -252,8 +273,8 @@ run_agent() {
   docker_args+=(
     --workdir /workspace
     --volume "$workspace:/workspace"
-    --volume "$volume_config:/root/.config/${name}"
-    --volume "$volume_sessions:/root/.local/share/${name}"
+    --volume "$volume_config:$run_config_dir"
+    --volume "$volume_sessions:$run_data_dir"
     --volume "$volume_libs:/var/cache/apk"
     "$image"
   )
