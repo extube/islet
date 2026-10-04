@@ -110,6 +110,20 @@ t_build() {
   rm -rf "$tmp"
 }
 
+# --- installer keeps an existing config.json ---------------------------------
+
+t_install_keeps_config() {
+  printf 'install — existing config.json is kept\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet"
+  printf '{"$schema":"islet.sh","container":"myagent","agent":{"myagent":{"image":"img:x"}}}' \
+    > "$home/.config/islet/config.json"
+  printf 'y\n\n' | HOME="$home" bash "$ROOT/install.sh" >/dev/null 2>&1
+  assert_eq 'existing config untouched' \
+    "$(jq_get "$home/.config/islet/config.json" '.agent.myagent.image')" 'img:x'
+  rm -rf "$home"
+}
+
 # --- run agent with the new config schema ------------------------------------
 
 t_run_schema() {
@@ -147,6 +161,72 @@ JSON
   # rm command with the new schema
   HOME="$home" bash "$ROOT/islet.sh" rm opencode >/dev/null 2>&1 </dev/null
   assert_eq 'rm agent' "$(jq_get "$home/.config/islet/config.json" '.agent // "{}"')" '{}'
+  rm -rf "$home"
+}
+
+# --- run: -v extra volumes -----------------------------------------------------
+
+t_run_volumes_flag() {
+  printf 'run agent — -v extra volumes flag\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet" "$home/ws" "$home/ssh" "$home/sub/deep"
+  cat > "$home/.config/islet/config.json" <<'JSON'
+{
+  "$schema": "islet.sh",
+  "container": "opencode",
+  "agent": {
+    "opencode": { "image": "islet/opencode:latest" }
+  }
+}
+JSON
+  make_fake_docker
+  rm -f /tmp/islet-fake-docker.log
+
+  # Existing dir mounts as-is.
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" \
+    -v "$home/ssh:/root/.ssh:ro,$home/sub:/work" >/dev/null 2>&1
+  local got; got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
+  check 'two -v volumes mounted' \
+    "$(grep -q -- "--volume $home/ssh:/root/.ssh:ro" <<<"$got" \
+      && grep -q -- "--volume $home/sub:/work" <<<"$got" && echo 0 || echo 1)"
+
+  # Missing host dir -> error exit, no docker run.
+  rm -f /tmp/islet-fake-docker.log
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" \
+    -v "$home/missing:/x" >/dev/null 2>&1 </dev/null || true
+  check 'missing host dir rejected' "$(grep -q docker /tmp/islet-fake-docker.log 2>/dev/null && echo 1 || echo 0)"
+
+  # Malformed spec -> error exit.
+  rm -f /tmp/islet-fake-docker.log
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" \
+    -v 'no-colon-here' >/dev/null 2>&1 </dev/null || true
+  check 'malformed -v rejected' "$(grep -q docker /tmp/islet-fake-docker.log 2>/dev/null && echo 1 || echo 0)"
+
+  # '!' escapes ":" in a container path; ~ expands to home; lone "!" is kept.
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" \
+    -v '~/ssh:keys!:one' >/dev/null 2>&1 </dev/null
+  got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
+  check '~ and ! work (~/ssh -> keys:one)' \
+    "$(grep -q -- "--volume $home/ssh:keys:one" <<<"$got" && echo 0 || echo 1)"
+
+  rm -rf "$home"
+}
+
+# --- islet rm keeps the config folder ----------------------------------------
+
+t_rm_keeps_config() {
+  printf 'islet rm — full uninstall keeps config.json\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet" "$home/.local/bin"
+  printf '{"$schema":"islet.sh","container":"a1","agent":{"a1":{"image":"img:x"}}}' \
+    > "$home/.config/islet/config.json"
+  touch "$home/.local/bin/islet"
+  printf 'yes\n' | HOME="$home" bash "$ROOT/islet.sh" rm >/dev/null 2>&1
+  check 'config.json survived uninstall' \
+    "$(jq_get "$home/.config/islet/config.json" '.agent.a1.image' 2>/dev/null | grep -qx 'img:x' && echo 0 || echo 1)"
+  check 'islet command removed'   "$([[ ! -e "$home/.local/bin/islet" ]]; echo $?)"
+  check 'config folder survived'  "$([[ -d "$home/.config/islet" ]]; echo $?)"
+
   rm -rf "$home"
 }
 
@@ -191,9 +271,12 @@ t_setup() {
 t_syntax
 t_install
 t_install_flag
+t_install_keeps_config
 t_create
 t_build
 t_run_schema
+t_run_volumes_flag
+t_rm_keeps_config
 t_setup
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

@@ -88,6 +88,23 @@ Option B — edit `config.json` by hand. Every entry only needs these fields:
    islet <agent-name> ~/project
    ```
 
+### One-off volume mounts (`-v`)
+
+Extra bind mounts — ssh keys, cache dirs, anything — can be attached to a
+single run with `-v` (or `--volume`), without touching `config.json`:
+
+```sh
+islet opencode ~/project -v ~/.ssh:/root/.ssh:ro
+islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
+```
+
+- comma-separated `host:container[:flags]` pairs; `flags` is passed as-is to
+  `docker run --volume`
+- `~` expands to the host home dir; `!` marks a literal `:` in a path
+  (`dest!:with:colon` -> `/dest:with:colon`)
+- the host path must exist (it is created with `mkdir -p` if missing)
+- the volumes are mounted in addition to the `config.json` ones
+
 ## Requirements
 
 - Docker
@@ -101,9 +118,10 @@ islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)
 islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
 islet setup                # 5-step wizard: add an agent entry to config.json
 islet [name] [workspace]   # run an agent (name/order optional)
+islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)
 islet ps                   # list running islet containers
 islet rm [name]            # remove one agent entry from the config
-islet rm                   # uninstall: config + installed islet command
+islet rm                   # uninstall the islet command (config.json is kept)
 islet --help
 ```
 
@@ -123,6 +141,11 @@ Without the installed command, use `./islet.sh` with the same arguments.
 - `volume_config` defaults to `~/.config/<agent-name>` on the host,
   mounted at `/root/.config/<agent-name>`.
 - Interactive TTY; the container is removed automatically on exit.
+- `islet rm` (uninstall) removes only the installed `islet` commands; the
+  islet config folder and `config.json` are kept, so reinstalling preserves
+  every agent entry.
+- Re-running the installer never overwrites an existing `config.json` —
+  it is kept as-is and only the `islet` command is refreshed.
 
 ## Testing
 

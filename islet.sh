@@ -71,6 +71,9 @@ Run:
     Sessions/auth are saved to ~/.local/share/islet/<agent-name>-sessions
     on the host (override with "volume_sessions" in config.json) and
     mounted at /root/.local/share/<agent-name>, so they survive --rm runs.
+  -v host_path:container_path[,host2:container2,...]
+              extra bind mounts for this run (e.g. ~/.ssh:/root/.ssh:ro);
+              comma-separated, mounted in addition to config.json volumes
 
 Examples:
   $SCRIPT_NAME create my.dockerfile  # generate a Dockerfile
@@ -140,19 +143,18 @@ run_rm() {
   # --- full uninstall ------------------------------------------------------
   require_cmd jq
   local ans
-  printf '%sRemove the islet config and the installed islet command? (y/N)%s ' \
-    "$C_YELLOW" "$C_RESET" >&2
+  printf '%sUninstall islet (the %s config folder and config.json are kept)? (y/N)%s ' \
+    "$C_YELLOW" "$ISLET_CONFIG_DIR" "$C_RESET" >&2
   read -r ans || ans=''
   if [[ ! "$ans" =~ ^[Yy]([Ee][Ss])?$ ]]; then
     echo 'Aborted.'
     return 0
   fi
 
-  # Remove the whole config folder (config.json included).
-  if [[ -f "$ISLET_CONFIG" ]]; then
-    rm -f "$ISLET_CONFIG"
-    rmdir "$ISLET_CONFIG_DIR" 2>/dev/null || true
-  fi
+  # The islet config folder is deliberately preserved: config.json holds the
+  # agent entries, so a reinstall keeps everything configured. Only the two
+  # islet-installed shell commands go away. Delete by hand if really needed:
+  #   rm -rf ~/.config/islet
 
   # Clean all islet commands from ~/.local/bin.
   local bin_dir="${HOME}/.local/bin"
@@ -164,24 +166,38 @@ run_rm() {
     fi
   done
 
-  printf '%s✔ islet uninstalled%s\n' "$C_GREEN" "$C_RESET"
+  printf '%s✔ islet uninstalled (config folder kept: %s)%s\n' \
+    "$C_GREEN" "$ISLET_CONFIG_DIR" "$C_RESET"
   return 0
 }
 
 run_agent() {
-  local name='' workspace=''
+  local name='' workspace='' volumes_arg=''
 
   # Flexible arguments: an existing directory is the workspace,
   # anything else is treated as an agent name. Order doesn't matter.
+  # Options: -v host:container[,host2:container2,...] — extra bind mounts.
   local arg
-  for arg in "$@"; do
-    if [[ -d "$arg" ]]; then
-      [[ -z "$workspace" ]] || die "multiple workspaces given: '$workspace' and '$arg'"
-      workspace="$arg"
-    else
-      [[ -z "$name" ]] || die "multiple agent names given: '$name' and '$arg'"
-      name="$arg"
-    fi
+  while (($#)); do
+    arg="$1"
+    shift
+    case "$arg" in
+    -v | --volume)
+      [[ -n "${1:-}" ]] || die "-v requires an argument: host:container[,host2:container2]"
+      volumes_arg="$1"
+      shift
+      ;;
+    -v=* | --volume=*) volumes_arg="${arg#*=}" ;;
+    *)
+      if [[ -d "$arg" ]]; then
+        [[ -z "$workspace" ]] || die "multiple workspaces given: '$workspace' and '$arg'"
+        workspace="$arg"
+      else
+        [[ -z "$name" ]] || die "multiple agent names given: '$name' and '$arg'"
+        name="$arg"
+      fi
+      ;;
+    esac
   done
   workspace="${workspace:-$PWD}"
 
@@ -222,6 +238,30 @@ run_agent() {
   volume_libs="${volume_libs/#\~/$HOME}"
   volume_config="${volume_config/#\~/$HOME}"
   volume_sessions="${volume_sessions/#\~/$HOME}"
+
+  # Extra volumes from -v ("host:container,host2:container2", :ro... flags
+  # allowed): expand ~, require both halves, validate the host path exists,
+  # and collect ready-to-mount spec strings ("host:container[:flags]").
+  local -a extra_volumes=()
+  if [[ -n "$volumes_arg" ]]; then
+    local -a specs=()
+    IFS=',' read -r -a specs <<<"$volumes_arg"
+    local spec host container
+    for spec in "${specs[@]}"; do
+      spec="${spec/#\~/$HOME}"
+      spec="${spec//!:/%%ISLET_ESC%%}" # "!:" marks an escaped ":"
+      spec="${spec//!/:}"              # a lone "!" is a literal ":"
+      spec="${spec//%%ISLET_ESC%%/:}"
+      [[ "$spec" == *:* ]] || die "-v volume needs host:container: $spec"
+      host="${spec%%:*}"
+      container="${spec#*:}"
+      [[ -n "$host" && -n "$container" ]] ||
+        die "-v volume needs both host and container paths: $spec"
+      [[ -e "$host" ]] || die "-v host path does not exist: $host"
+      mkdir -p "$host"
+      extra_volumes+=("$host:$container")
+    done
+  fi
 
   [[ -d "$workspace" ]] || die "workspace directory does not exist: $workspace"
   workspace="$(cd "$workspace" && pwd)"
@@ -276,8 +316,12 @@ run_agent() {
     --volume "$volume_config:$run_config_dir"
     --volume "$volume_sessions:$run_data_dir"
     --volume "$volume_libs:/var/cache/apk"
-    "$image"
   )
+  local extra
+  for extra in "${extra_volumes[@]}"; do
+    docker_args+=(--volume "$extra")
+  done
+  docker_args+=("$image")
 
   echo "Agent:     $name"
   echo "Image:     $image"

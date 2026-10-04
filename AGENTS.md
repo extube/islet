@@ -13,12 +13,14 @@ containers. It currently supports
 
 - `islet.sh` — stable script. Config-driven runner: `islet.sh [name]
   [workspace]` runs the selected agent (sessions and auth persist on the
-  host), `islet.sh ps` lists running islet containers. `islet.sh rm
+  host), `-v host:container[,...]` adds one-off extra volume mounts, and
+  `islet.sh ps` lists running islet containers. `islet.sh rm
   [name]` removes one agent piece from config.json (empty `$schema`/
   `container` keys are dropped when it was the last agent); bare
-  `islet.sh rm` uninstalls — after a `y/N` prompt it deletes the config
-  folder and the islet-installed commands (`islet`, `islet-dev`) from
-  `~/.local/bin`.
+  `islet.sh rm` uninstalls — after a `y/N` prompt it removes the
+  islet-installed commands (`islet`, `islet-dev`) from `~/.local/bin`
+  and deliberately keeps the config folder and `config.json` (the
+  installer also preserves an existing config).
 - `install.sh` — installer. Interactive initialization wizard; **merges**
   the configured agent into the existing config (same-name agents get
   their piece replaced, siblings and the default container are kept) and
