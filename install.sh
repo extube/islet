@@ -241,11 +241,14 @@ main() {
 
   # Create only the islet scaffolding — agent entries live in config.json
   # and are added after a Dockerfile is created and built (see README.md).
+  # An existing config.json is never overwritten or deleted: the installer
+  # is idempotent, and `islet rm` (uninstall) keeps the file as well.
   if [[ ! -f "$ISLET_CONFIG" ]]; then
     jq -n '{"$schema": "islet.sh"}' > "$ISLET_CONFIG"
     printf '%s✔ islet config created at %s%s\n' "$C_GREEN" "$ISLET_CONFIG" "$C_RESET"
   else
-    printf '  %sconfig found at %s%s — keeping it\n' "$C_DIM" "$ISLET_CONFIG" "$C_RESET"
+    printf '  %sconfig found at %s%s — keeping it (agents preserved)%s\n' \
+      "$C_DIM" "$ISLET_CONFIG" "$C_RESET" "$C_RESET"
   fi
 
   # --- islet command into ~/.local/bin -------------------------------------
