@@ -138,12 +138,42 @@ Manual testing approach used so far:
 - `cat install.sh | ISLET_INSTALL_URL="file://$PWD/install.sh" sh` to test
   the curl-pipe re-exec path locally.
 
-## Branching
+## Branching / git workflow (enforced by hooks)
 
-- `main` — stable branch
-- `dev` — integration branch
-- `feat-agent/#<number>-<description>` — feature branches, created from `dev`
-  and merged back into `dev`
+The rules below are **enforced programmatically** by the git hooks in
+`githooks/` (activated for a checkout with `scripts/install-hooks.sh`;
+repo already has `core.hooksPath=githooks` configured). The agent MUST
+follow them exactly:
+
+1. **No commits on `main`/`dev`** — direct commits (including merge
+   commits other than feature merges) are rejected by `pre-commit`.
+2. **Every new feature starts a new branch created from `dev`** — use
+   `scripts/new-branch.sh <name>`, which also handles rule 7.
+3. **No merges into `main`** — `pre-merge-commit` rejects any merge
+   targeting `main`; feature branches merge into `dev` only.
+4. **Push only when the user asks** — never push on your own. As a
+   safety net, pushes to `main`/`dev` are blocked by `pre-push`; the
+   user can override explicitly with `ISLET_ALLOW_MAIN_PUSH=1`.
+5. **Branch naming** — `<feat|bug|hotfix>-#<number>-<description>`
+   (e.g. `feat-#12-add-volume-mounts`). Checked in `pre-commit`,
+   `commit-msg` (for merges into `dev`) and `pre-push`.
+6. **Delete after merge into `dev`** — `post-merge` automatically
+   deletes the merged feature branch (local, and its remote counterpart
+   if it exists).
+7. **Before creating a branch from `dev`: load ssh keys and sync
+   `main`/`dev`** — `scripts/new-branch.sh` does this: `ssh-add -l`,
+   `git fetch --prune`, fast-forward `main` and `dev` to `origin/*`,
+   then branches off `dev`.
+8. **Commit message format** — `<feat|bug>: [#number] - description`
+   (e.g. `feat: [#12] - add docker volume mounts`), enforced by
+   `commit-msg`.
+
+Branch roles:
+
+- `main` — stable branch (no local commits/merges; push only on request)
+- `dev` — integration branch (feature branches merge here)
+- `feat|bug|hotfix-#<number>-<description>` — work branches, created
+  from `dev`, merged back into `dev`, deleted afterwards
 
 ## Git
 
