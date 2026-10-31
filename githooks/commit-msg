@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Enforce "<feat|bug>: [#number] - description" and feature-branch naming
+# for the source of merge commits into dev.
+set -uo pipefail
+
+. "$(dirname "$0")/common.sh"
+
+branch="$(current_branch)"
+GDIR="$(git rev-parse --git-dir)"
+
+if [ "$branch" = "dev" ]; then
+    if ! [ -f "$GDIR/MERGE_HEAD" ]; then
+        deny "commits to 'dev' are restricted — create a branch from 'dev' for new features"
+    fi
+    other="$(merged_branch)"
+    if [ -z "$other" ]; then
+        deny "cannot determine the source branch of this merge into 'dev'"
+    fi
+    if [ "$other" = "main" ]; then
+        deny "merging 'main' into 'dev' is not allowed — merge feature branches only"
+    fi
+    if ! feature_branch_name "$other"; then
+        deny "branch '${other}' has an invalid name — use feat|bug|hotfix-#<number>-<description>"
+    fi
+    exit 0
+fi
+
+if [ "$branch" = "main" ]; then
+    deny "commits to 'main' are restricted — create a branch from 'dev' for new features"
+fi
+
+# Skip merge/revert-generated commit messages.
+if head -1 "$1" | grep -Eq "^Merge |^Revert "; then
+    exit 0
+fi
+
+if ! commit_message_valid "$1"; then
+    deny "commit message must match: '<feat|bug>: [#number] - description'
+    e.g. 'feat: [#12] - add docker volume mounts'"
+fi
+
+exit 0
