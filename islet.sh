@@ -543,9 +543,10 @@ preinstall_pkgs() {
 }
 
 # dockerfile_for <agent> — print a Dockerfile for the supported agents
-# (Alpine base: opencode and hermes runtime installs, pi on node:24-alpine).
-# No preinstall deps here — those are picked in `islet setup`, stored in
-# config.json and baked into the derived image at run time.
+# (Alpine base: opencode/opencode v2 and hermes runtime installs, pi on
+# node:24-alpine). No preinstall deps here — those are picked in
+# `islet setup`, stored in config.json and baked into the derived image at
+# run time.
 dockerfile_for() {
   local agent="$1"
   shift
@@ -563,6 +564,26 @@ RUN apk add --no-cache \\
 # installed by the apk line above.
 ENV SHELL=/bin/sh
 RUN curl -fsSL https://opencode.ai/install | bash
+ENV PATH="/root/.opencode/bin:\${PATH}"
+
+RUN mkdir -p /workspace /root/.config/opencode
+WORKDIR /workspace
+
+ENTRYPOINT ["opencode"]
+EOF
+    ;;
+  opencode2)
+    cat <<EOF
+# opencode v2 agent harness — Alpine, runtime setup baked at build time.
+FROM alpine:latest
+
+RUN apk add --no-cache \\
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
+
+# Install the opencode v2 binary. The installer needs bash (not busybox sh)
+# — installed by the apk line above.
+ENV SHELL=/bin/sh
+RUN curl -fsSL https://opencode.ai/v2/install | bash
 ENV PATH="/root/.opencode/bin:\${PATH}"
 
 RUN mkdir -p /workspace /root/.config/opencode
@@ -603,7 +624,7 @@ WORKDIR /workspace
 ENTRYPOINT ["hermes"]
 EOF
     ;;
-  *) die "unsupported agent: $agent (supported: opencode, pi, hermes)" ;;
+  *) die "unsupported agent: $agent (supported: opencode, opencode2, pi, hermes)" ;;
   esac
 }
 
@@ -621,14 +642,16 @@ run_create() {
 
   printf '%sStep 1: agent%s\n' "$C_BOLD" "$C_RESET" >&2
   printf '  %s1)%s opencode\n' "$C_GREEN" "$C_RESET"
-  printf '  %s2)%s pi\n' "$C_GREEN" "$C_RESET"
-  printf '  %s3)%s hermes\n' "$C_GREEN" "$C_RESET"
+  printf '  %s2)%s opencode v2\n' "$C_GREEN" "$C_RESET"
+  printf '  %s3)%s pi\n' "$C_GREEN" "$C_RESET"
+  printf '  %s4)%s hermes\n' "$C_GREEN" "$C_RESET"
   local choice
   choice="$(ask 'Select agent' '1')"
   case "$choice" in
   1) agent='opencode' ;;
-  2) agent='pi' ;;
-  3) agent='hermes' ;;
+  2) agent='opencode2' ;;
+  3) agent='pi' ;;
+  4) agent='hermes' ;;
   *) die "invalid choice: $choice" ;;
   esac
 

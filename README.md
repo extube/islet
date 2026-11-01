@@ -27,8 +27,8 @@ flag), checks the requirements (`jq`, `docker`), creates a fresh
 Option A — from a Dockerfile (agent built into the image):
 
 1. **Create a Dockerfile** (`islet create` — single step: choose the agent
-   opencode, pi or hermes; preinstall deps are NOT picked here — that
-   happens in `islet setup`):
+   opencode, opencode v2, pi or hermes; preinstall deps are NOT picked
+   here — that happens in `islet setup`):
 
    ```sh
    islet create ~/my-agents/opencode.Dockerfile
@@ -146,7 +146,8 @@ islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
 ## Usage
 
 ```sh
-islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
+islet create [file]        # Dockerfile (opencode / opencode v2 / pi / hermes)
+islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
 islet setup                # 5-step wizard: add an agent entry to config.json
 islet setup --name pi --image img:pi --preinstall 'Node.js,Go' \
   --config-volume ~/.config/pi --network bridge --env 'K=v'
