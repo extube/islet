@@ -18,10 +18,9 @@ if [ "$branch" = "dev" ] && [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
     if [ -z "$other" ]; then
         deny "cannot determine the source branch of this merge into 'dev'"
     fi
-    if [ "$other" = "main" ]; then
-        deny "merging 'main' into 'dev' is not allowed — merge feature branches only"
-    fi
-    if ! feature_branch_name "$other"; then
+    # Sync merges from main are allowed; otherwise the source must be a
+    # properly named feature branch.
+    if [ "$other" != "main" ] && ! feature_branch_name "$other"; then
         deny "branch '${other}' has an invalid name — use feat|bug|hotfix-#<number>-<description>"
     fi
 fi
