@@ -84,11 +84,17 @@ t_create() {
     "$(grep -q 'nodejs npm' "$tmp/opencode.Dockerfile" && echo 1 || echo 0)"
   check 'no preinstall baked (ruby)'   "$(grep -q ' ruby' "$tmp/opencode.Dockerfile" && echo 1 || echo 0)"
 
-  printf '3\n' | HOME="$tmp" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
+  printf '4\n' | HOME="$tmp" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
   check 'hermes.Dockerfile created' \
     "$([[ -f "$tmp/hermes.Dockerfile" ]]; echo $?)"
+  # opencode v2 Dockerfile (choice 2).
+  printf '2\n' | HOME="$tmp" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
+  assert_eq 'opencode2 base' \
+    "$(grep -m1 '^FROM alpine' "$tmp/opencode2.Dockerfile")" 'FROM alpine:latest'
+  check 'opencode2 install url' \
+    "$(grep -q 'opencode.ai/v2/install' "$tmp/opencode2.Dockerfile" && echo 0 || echo 1)"
   # pi Dockerfile to the given file path.
-  printf '2\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
+  printf '3\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
   assert_eq 'pi base'   "$(grep -m1 '^FROM node:24-alpine' /tmp/pi-test.Dockerfile)" 'FROM node:24-alpine'
   rm -f /tmp/pi-test.Dockerfile
   rm -rf "$tmp"
