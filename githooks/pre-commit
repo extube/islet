@@ -7,8 +7,17 @@ set -uo pipefail
 branch="$(current_branch)"
 [ -n "$branch" ] || exit 0
 
-if [ "$branch" = "main" ] || [ "$branch" = "dev" ]; then
-    deny "commits to '${branch}' are restricted — create a branch from 'dev' for new features"
+if [ "$branch" = "main" ]; then
+    deny "commits to 'main' are restricted — create a branch from 'dev' for new features"
+fi
+
+if [ "$branch" = "dev" ]; then
+    # Merge commits into dev are validated by commit-msg (source naming);
+    # direct commits stay blocked.
+    [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ] || {
+        deny "commits to 'dev' are restricted — create a branch from 'dev' for new features"
+    }
+    exit 0
 fi
 
 if ! feature_branch_name "$branch"; then
