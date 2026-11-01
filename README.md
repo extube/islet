@@ -24,7 +24,7 @@ flag), checks the requirements (`jq`, `docker`), creates a fresh
 
 ## Adding an agent to config.json
 
-Option A — from a Dockerfile (agent built into the image):
+Option A — from a Dockerfile (agent + preinstall baked into the image):
 
 1. **Create a Dockerfile** (`islet create` — step 1: choose the agent
    opencode, pi or hermes; step 2: multi-select the preinstall environment
@@ -41,16 +41,18 @@ Option A — from a Dockerfile (agent built into the image):
    islet build ~/my-agents/opencode.Dockerfile
    ```
 
-3. **Register it in the config** with the 5-step `islet setup` wizard
-   (each step has a default — agent name, image, agent config volume,
-   network, environment variables). Point `image` at
+3. **Register it in the config** with the 6-step `islet setup` wizard
+   (each step has a default — agent name, image, preinstall environment,
+   agent config volume, network, environment variables). Point `image` at
    `islet/<agent>:latest`:
 
    ```sh
    islet setup
    ```
 
-Option B — edit `config.json` by hand. Every entry only needs these fields:
+Option B — config only, no Dockerfile. Edit `config.json` by hand; every
+entry needs just an `image`, and the `preinstall` list (optional) is baked
+into a per-agent derived image automatically on the first run:
 
 ```json
 {
@@ -59,7 +61,7 @@ Option B — edit `config.json` by hand. Every entry only needs these fields:
   "agent": {
     "opencode": {
       "image": "islet/opencode:latest",
-      "volume_libs": "~/.local/share/islet/opencode-libs",
+      "preinstall": ["Node.js"],
       "volume_config": "~/.config/opencode",
       "network": "host",
       "ports": [],
@@ -70,8 +72,18 @@ Option B — edit `config.json` by hand. Every entry only needs these fields:
 ```
 
    - `image` — the image built with `islet build` (or any other image)
-   - `volume_libs` — one host dir for installed libs; it is mounted at
-     `/var/cache/apk` so package downloads survive container restarts
+   - `preinstall` — dependency list from `islet create`/`islet setup`
+     (Git, Node.js, Go, Java, Python, Rust, Ruby, C/C++); baked into a
+     derived image `islet-pre:<name>-<keyed hash>` on the first run and
+     rebuilt only when the list or the base image changes
+   - deps dir — `~/.config/islet/<agent-name>/deps` next to `config.json`;
+     the agent's tool store, mounted at `/opt/islet-tools` and
+     `/root/.local` in the container: libraries and programs installed
+     **during a run** (apk add, pip --user, npm install -g, gem install,
+     go install, ...) are captured here and are still available on the
+     next run of the same agent
+   - `volume_libs` — optional override of the apk download cache
+     (default `<deps dir>/apk-cache`, mounted at `/var/cache/apk`)
    - `volume_config` — agent config dir (default `~/.config/<agent-name>`,
      mounted at `/root/.config/<agent-name>` in the container)
    - `volume_sessions` — optional override of the saved sessions dir
@@ -116,7 +128,7 @@ islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
 ```sh
 islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)
 islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
-islet setup                # 5-step wizard: add an agent entry to config.json
+islet setup                # 6-step wizard: add an agent entry to config.json
 islet [name] [workspace]   # run an agent (name/order optional)
 islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)
 islet ps                   # list running islet containers
@@ -129,15 +141,21 @@ Without the installed command, use `./islet.sh` with the same arguments.
 
 ## How it works
 
-- Runs the agent harness inside a Docker image built from a generated
-  Dockerfile (`islet create` + `islet build`).
+- Runs the agent harness inside a Docker image; optionally derived from
+  the configured image with the `preinstall` list baked in
+  (`islet-pre:<name>-<key>`, built automatically, cached across runs).
 - Mounts your workspace at `/workspace` inside the container.
-- Multi-agent configs: each entry can set its own image, volumes, network,
-  ports and environment variables.
+- Multi-agent configs: each entry can set its own image, preinstall list,
+  volumes, network, ports and environment variables.
 - Persisted volumes: agent config (`volume_config`), saved sessions
-  (`~/.local/share/islet/<agent-name>-sessions`) and the installed-libs
-  cache (`volume_libs`), so config, sessions and packages survive `--rm`
-  runs and Docker restarts.
+  (`~/.local/share/islet/<agent-name>-sessions`) and the per-agent deps
+  dir (`~/.config/islet/<agent-name>/deps`), so config, sessions and
+  packages survive `--rm` runs and Docker restarts.
+- Both image-baked (`preinstall`) and runtime installs (the agent's own
+  `apk add`, `pip --user`, `npm install -g`, `gem install`, `go install`,
+  ...) survive: runtime installs land in the deps dir via a redirected
+  package-manager environment (and an `apk` wrapper that installs into
+  the deps-dir rootfs).
 - `volume_config` defaults to `~/.config/<agent-name>` on the host,
   mounted at `/root/.config/<agent-name>`.
 - Interactive TTY; the container is removed automatically on exit.

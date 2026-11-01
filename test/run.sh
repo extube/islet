@@ -152,11 +152,11 @@ JSON
   local got; got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
   check 'workspace mounted'    "$(grep -q -- "--volume $home/ws:/workspace" <<<"$got" && echo 0 || echo 1)"
   check 'agent config volume'  "$(grep -q -- "--volume $home/.config/opencode:/root/.config/opencode" <<<"$got" && echo 0 || echo 1)"
-  check 'libs volume (apk cache)' "$(grep -q -- "--volume $home/.local/share/islet/opencode-libs:/var/cache/apk" <<<"$got" && echo 0 || echo 1)"
+  check 'apk cache override (volume_libs)' "$(grep -q -- "--volume $home/.local/share/islet/opencode-libs:/var/cache/apk" <<<"$got" && echo 0 || echo 1)"
   check 'sessions volume'      "$(grep -q -- "--volume $home/.local/share/islet/opencode-sessions:/root/.local/share/opencode" <<<"$got" && echo 0 || echo 1)"
   check 'port published'       "$(grep -q -- '--publish 8080:8080' <<<"$got" && echo 0 || echo 1)"
   check 'env var'              "$(grep -q -- '--env API_KEY=abc' <<<"$got" && echo 0 || echo 1)"
-  check 'image last'           "$(grep -q ' islet/opencode:latest$' <<<"$got" && echo 0 || echo 1)"
+  check 'image last (derived)' "$(grep -q ' islet-pre:opencode-' <<<"$got" && echo 0 || echo 1)"
 
   # rm command with the new schema
   HOME="$home" bash "$ROOT/islet.sh" rm opencode >/dev/null 2>&1 </dev/null
@@ -233,37 +233,47 @@ t_rm_keeps_config() {
 # --- islet setup -------------------------------------------------------------
 
 t_setup() {
-  printf 'islet setup — 5-step wizard into config.json\n'
+  printf 'islet setup — 6-step wizard into config.json\n'
   local home; home="$(mktemp -d)"
   make_fake_docker
 
-  # Answers: name (pi), image, config volume, network (2 = bridge), env.
-  printf 'pi\nimg:pi:2\n\n2\nFOO=2\n' \
+  # Answers: name (pi), image, preinstall toggle '2 7' (Node.js Ruby),
+  # confirm, config volume, network (2 = bridge), env.
+  printf '%s\n' 'pi' 'img:pi:2' '2 7' '' '' '2' 'FOO=2' \
     | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
   local cfg="$home/.config/islet/config.json"
   check 'config created'          "$([[ -f "$cfg" ]]; echo $?)"
   assert_eq 'entry name'          "$(jq_get "$cfg" '.container')"               'pi'
   assert_eq 'image'               "$(jq_get "$cfg" '.agent.pi.image')"          'img:pi:2'
+  assert_eq 'preinstall saved'    "$(jq_get "$cfg" '.agent.pi.preinstall | join(" ")')" 'Node.js Ruby'
   assert_eq 'config volume'       "$(jq_get "$cfg" '.agent.pi.volume_config')"  '~/.config/pi'
-  assert_eq 'libs volume'         "$(jq_get "$cfg" '.agent.pi.volume_libs')"    '~/.local/share/islet/pi-libs'
   assert_eq 'network'             "$(jq_get "$cfg" '.agent.pi.network')"        'bridge'
   assert_eq 'environment'         "$(jq_get "$cfg" '.agent.pi.environment.FOO')" '2'
 
   # Sibling kept on the second setup; same name replaces its own entry.
   HOME="$home" bash "$ROOT/install.sh" --config-dir "$home/none" >/dev/null 2>&1 </dev/null || true
-  printf 'sib\nsib:img\n\n\n\n' \
+  printf '%s\n' 'sib' 'sib:img' '' '' '' '' \
     | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
-  printf 'pi\npi:v2\n\n1\n\n' \
+  printf '%s\n' 'pi' 'pi:v2' '' '' '' '' \
     | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
   assert_eq 'sibling kept'        "$(jq_get "$cfg" '.agent.sib.image')"         'sib:img'
   assert_eq 'entry replaced'      "$(jq_get "$cfg" '.agent.pi.image')"          'pi:v2'
+  assert_eq 'preinstall replaced' "$(jq_get "$cfg" '.agent.pi.preinstall')"     '[]'
 
-  # Run the saved entry end-to-end (fake docker).
+  # Run the saved entry end-to-end (fake docker): preinstall is baked into
+  # a derived image and the deps dir is mounted as the agent tool store.
   mkdir -p "$home/ws"; rm -f /tmp/islet-fake-docker.log
   HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" pi "$home/ws" >/dev/null 2>&1
+  local got; got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
   check 'runs the saved entry' \
-    "$(grep -q -- '--volume '"$home"'/ws:/workspace' /tmp/islet-fake-docker.log 2>/dev/null && \
-      grep -q ' pi:v2$' /tmp/islet-fake-docker.log 2>/dev/null && echo 0 || echo 1)"
+    "$(grep -q -- '--volume '"$home"'/ws:/workspace' <<<"$got" && echo 0 || echo 1)"
+  check 'derived preinstall image' "$(grep -q 'islet-pre:pi-' <<<"$got" && echo 0 || echo 1)"
+  check 'deps hub mounted' \
+    "$(grep -q -- "--volume $home/.config/islet/pi/deps:/opt/islet-tools" <<<"$got" && echo 0 || echo 1)"
+  check 'deps pip mount' \
+    "$(grep -q -- "--volume $home/.config/islet/pi/deps:/root/.local" <<<"$got" && echo 0 || echo 1)"
+  check 'apk cache inside deps' \
+    "$(grep -q -- "--volume $home/.config/islet/pi/deps/apk-cache:/var/cache/apk" <<<"$got" && echo 0 || echo 1)"
   rm -rf "$home"
 }
 
