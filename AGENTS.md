@@ -27,8 +27,9 @@ containers. It currently supports
   (`/usr/local/bin/apk`, `apk --root .../deps-alpine rootfs`). The
   setup wizard now has six steps (name, image, preinstall multi-select,
   config volume, network, environment) writing `preinstall` into
-  config.json. `islet.sh create`/`build` remain the manual route
-  (generate a Dockerfile, build it, set the image in config.json).
+  config.json — that wizard (setup) is the place where deps are picked;
+  `islet.sh create` generates a bare agent Dockerfile (fixed runtime,
+  no preinstall step) and `islet.sh build` just docker-builds it.
   `islet.sh rm [name]` removes one agent piece from config.json (empty
   `$schema`/`container` keys are dropped when it was the last agent);
   bare `islet.sh rm` uninstalls — after a `y/N` prompt it removes the
