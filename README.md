@@ -24,12 +24,11 @@ flag), checks the requirements (`jq`, `docker`), creates a fresh
 
 ## Adding an agent to config.json
 
-Option A — from a Dockerfile (agent + preinstall baked into the image):
+Option A — from a Dockerfile (agent built into the image):
 
-1. **Create a Dockerfile** (`islet create` — step 1: choose the agent
-   opencode, pi or hermes; step 2: multi-select the preinstall environment
-   (Git, Node.js, Go, Java, Python, Rust, Ruby, C/C++ — baked into the
-   image as apk packages, so it survives every container restart)):
+1. **Create a Dockerfile** (`islet create` — single step: choose the agent
+   opencode, pi or hermes; preinstall deps are NOT picked here — that
+   happens in `islet setup`):
 
    ```sh
    islet create ~/my-agents/opencode.Dockerfile
@@ -72,7 +71,7 @@ into a per-agent derived image automatically on the first run:
 ```
 
    - `image` — the image built with `islet build` (or any other image)
-   - `preinstall` — dependency list from `islet create`/`islet setup`
+   - `preinstall` — dependency list picked in `islet setup`
      (Git, Node.js, Go, Java, Python, Rust, Ruby, C/C++); baked into a
      derived image `islet-pre:<name>-<keyed hash>` on the first run and
      rebuilt only when the list or the base image changes
@@ -126,8 +125,7 @@ islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
 ## Usage
 
 ```sh
-islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)
-islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
+islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
 islet setup                # 6-step wizard: add an agent entry to config.json
 islet [name] [workspace]   # run an agent (name/order optional)
 islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)

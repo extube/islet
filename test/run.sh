@@ -74,22 +74,21 @@ t_install_flag() {
 # --- islet create ------------------------------------------------------------
 
 t_create() {
-  printf 'islet create — agent + preinstall environment\n'
+  printf 'islet create — one-step agent Dockerfile (no preinstall here)\n'
   local tmp; tmp="$(mktemp -d)"
-  # Answers: agent (1), preinstall toggle '2 7' (Node.js Ruby), confirm.
-  printf '1\n2 7\n\n' | HOME="$tmp" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
+  # Answers: agent (1) only — deps are picked in `islet setup`, not here.
+  printf '1\n' | HOME="$tmp" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
   check 'opencode.Dockerfile created'  "$([[ -f "$tmp/opencode.Dockerfile" ]]; echo $?)"
   assert_eq 'alpine base'              "$(grep -m1 '^FROM alpine' "$tmp/opencode.Dockerfile")" 'FROM alpine:latest'
-  check 'preinstall baked (nodejs npm)' \
-    "$(grep -q 'nodejs npm' "$tmp/opencode.Dockerfile" && echo 0 || echo 1)"
-  check 'preinstall baked (ruby)'      "$(grep -q 'ruby' "$tmp/opencode.Dockerfile" && echo 0 || echo 1)"
+  check 'no preinstall baked (nodejs npm)' \
+    "$(grep -q 'nodejs npm' "$tmp/opencode.Dockerfile" && echo 1 || echo 0)"
+  check 'no preinstall baked (ruby)'   "$(grep -q ' ruby' "$tmp/opencode.Dockerfile" && echo 1 || echo 0)"
 
-  # Skip the preinstall list (empty toggle line) -> plain apk line only.
-  printf '3\n\n' | HOME="$tmp" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
-  check 'hermes preinstall skipped' \
-    "$(grep -A1 'apk add' "$tmp/hermes.Dockerfile" | grep -Eq 'nodejs|openjdk|cargo' && echo 1 || echo 0)"
-  # pi with Git preselected.
-  printf '2\n1\n\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
+  printf '3\n' | HOME="$tmp" bash "$ROOT/islet.sh" create "$tmp" >/dev/null 2>&1
+  check 'hermes.Dockerfile created' \
+    "$([[ -f "$tmp/hermes.Dockerfile" ]]; echo $?)"
+  # pi Dockerfile to the given file path.
+  printf '2\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
   assert_eq 'pi base'   "$(grep -m1 '^FROM node:24-alpine' /tmp/pi-test.Dockerfile)" 'FROM node:24-alpine'
   rm -f /tmp/pi-test.Dockerfile
   rm -rf "$tmp"

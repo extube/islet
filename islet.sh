@@ -42,7 +42,7 @@ print_help() {
 islet (dev) — run AI agents in isolated Docker containers
 
 Usage:
-  $SCRIPT_NAME create [file]        Create a Dockerfile (agent + preinstall env)
+  $SCRIPT_NAME create [file]        Create a Dockerfile (opencode/pi/hermes)
   $SCRIPT_NAME build [file]         Build an agent image from a Dockerfile
   $SCRIPT_NAME setup                Add a new agent entry to config.json
   $SCRIPT_NAME [name] [workspace]   Run an agent from config
@@ -498,8 +498,8 @@ multichoice() {
   return 0
 }
 
-# preinstall_pkgs <dep>... — maps preinstall environment items to the
-# Alpine package names baked into the generated Dockerfile.
+# preinstall_pkgs <dep>... — maps preinstall environment items (as stored
+# in config.json) to the Alpine package names baked into the derived image.
 preinstall_pkgs() {
   local out='' dep
   for dep in "$@"; do
@@ -517,13 +517,13 @@ preinstall_pkgs() {
   printf '%s' "${out# }"
 }
 
-# dockerfile_for <agent> [extra-apk-packages] — print a Dockerfile for the
-# supported agents (Alpine base: opencode and hermes runtime installs, pi on
-# node:24-alpine). Selected preinstall deps are baked in as apk packages, so
-# the environment survives every container restart.
+# dockerfile_for <agent> — print a Dockerfile for the supported agents
+# (Alpine base: opencode and hermes runtime installs, pi on node:24-alpine).
+# No preinstall deps here — those are picked in `islet setup`, stored in
+# config.json and baked into the derived image at run time.
 dockerfile_for() {
-  local extra_pkgs
-  extra_pkgs="$(preinstall_pkgs "${@:2}")"
+  local agent="$1"
+  shift
 
   case "$agent" in
   opencode)
@@ -532,8 +532,7 @@ dockerfile_for() {
 FROM alpine:latest
 
 RUN apk add --no-cache \\
-      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata${extra_pkgs:+ \\
-      $extra_pkgs}
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
 
 # Install the opencode binary.
 # SHELL must be set — the installer expands ${SHELL:?} (unset under busybox).
@@ -552,7 +551,7 @@ EOF
 # pi coding agent — Alpine, Node.js runtime.
 FROM node:24-alpine
 
-RUN apk add --no-cache bash ca-certificates git ripgrep${extra_pkgs:+ $extra_pkgs}
+RUN apk add --no-cache bash ca-certificates git ripgrep
 
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
@@ -568,8 +567,7 @@ EOF
 FROM alpine:latest
 
 RUN apk add --no-cache \\
-      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata${extra_pkgs:+ \\
-      $extra_pkgs}
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
 
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ENV PATH="/root/.hermes/bin:\${PATH}"
@@ -584,11 +582,10 @@ EOF
   esac
 }
 
-# run_create [file] — two interactive steps:
-#   1. choose the agent (pi/opencode/hermes)
-#   2. multi-select the preinstall environment (Git, Node.js, Go, Java,
-#      Python, Rust, Ruby, C/C++) — baked into the image as apk packages,
-#      so the environment survives every container restart.
+# run_create [file] — one interactive step: choose the agent
+# (opencode/pi/hermes). No preinstall selection here — deps are picked in
+# `islet setup` only, stored in config.json and baked into the derived
+# image on the next run.
 #   The Dockerfile is written to the given location: <file> is treated as
 #   a directory -> <dir>/<agent>.Dockerfile, or a filename -> used as-is.
 run_create() {
@@ -610,10 +607,6 @@ run_create() {
   *) die "invalid choice: $choice" ;;
   esac
 
-  printf '%sStep 2: preinstall environment%s\n' "$C_BOLD" "$C_RESET" >&2
-  local -a preinstall=()
-  multichoice preinstall 'Git' 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
-
   local file="$target"
   if [[ -z "$file" ]]; then
     file="./${agent}.Dockerfile"
@@ -624,9 +617,9 @@ run_create() {
   fi
 
   mkdir -p "$(cd "$(dirname "$file")" && pwd)"
-  dockerfile_for "$agent" "${preinstall[@]}" >"$file"
+  dockerfile_for "$agent" >"$file"
   printf '%s✔ Dockerfile written to %s%s\n' "$C_GREEN" "$file" "$C_RESET"
-  ((${#preinstall[@]})) && printf '  preinstall: %s\n' "${preinstall[*]}"
+  printf '  preinstall deps are picked in %s setup%s (saved to config.json)\n' "$C_BOLD" "$C_RESET"
   printf '  next: %s build %s\n' "$SCRIPT_NAME" "$file"
   return 0
 }
