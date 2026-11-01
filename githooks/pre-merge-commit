@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Never merge into 'main'. Source naming for merges into 'dev' is checked
+# here when MERGE_HEAD exists, and again in commit-msg (which also covers
+# automatic merges, where MERGE_HEAD is not written yet).
+set -uo pipefail
+
+. "$(dirname "$0")/common.sh"
+
+branch="$(current_branch)"
+[ -n "$branch" ] || exit 0
+
+if [ "$branch" = "main" ]; then
+    deny "merges into 'main' are restricted — merge feature branches into 'dev' only"$'\n'"(abort with: git merge --abort)"
+fi
+
+if [ "$branch" = "dev" ] && [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+    other="$(merged_branch)"
+    if [ -z "$other" ]; then
+        deny "cannot determine the source branch of this merge into 'dev'"
+    fi
+    if [ "$other" = "main" ]; then
+        deny "merging 'main' into 'dev' is not allowed — merge feature branches only"
+    fi
+    if ! feature_branch_name "$other"; then
+        deny "branch '${other}' has an invalid name — use feat|bug|hotfix-#<number>-<description>"
+    fi
+fi
+
+exit 0

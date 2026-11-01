@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Block direct commits on main/dev, and enforce the branch naming policy.
+set -uo pipefail
+
+. "$(dirname "$0")/common.sh"
+
+branch="$(current_branch)"
+[ -n "$branch" ] || exit 0
+
+if [ "$branch" = "main" ] || [ "$branch" = "dev" ]; then
+    deny "commits to '${branch}' are restricted — create a branch from 'dev' for new features"
+fi
+
+if ! feature_branch_name "$branch"; then
+    deny "branch '${branch}' has an invalid name — use feat|bug|hotfix-#<number>-<description>"
+fi
+
+exit 0

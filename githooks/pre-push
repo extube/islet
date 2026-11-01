@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Push only properly named feature branches; block main/dev unless the
+# user explicitly overrides with ISLET_ALLOW_MAIN_PUSH=1.
+set -uo pipefail
+
+. "$(dirname "$0")/common.sh"
+
+if [ "${ISLET_ALLOW_MAIN_PUSH:-}" = "1" ]; then
+    exit 0
+fi
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        refs/heads/main|refs/heads/dev)
+            deny "pushing to '${remote_ref#refs/heads/}' is restricted — set ISLET_ALLOW_MAIN_PUSH=1 only when explicitly asked"
+            ;;
+        refs/heads/*)
+            branch="${remote_ref#refs/heads/}"
+            if ! feature_branch_name "$branch"; then
+                deny "branch '${branch}' has an invalid name — use feat|bug|hotfix-#<number>-<description>"
+            fi
+            ;;
+    esac
+done
+
+exit 0

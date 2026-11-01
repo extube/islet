@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# After a merge into 'dev', delete the merged feature branch (local, plus
+# its remote counterpart when one exists). Squash merges are skipped.
+set -uo pipefail
+
+. "$(dirname "$0")/common.sh"
+
+[ "${1:-}" = "--squash" ] && exit 0
+
+branch="$(current_branch)"
+[ "$branch" = "dev" ] || exit 0
+
+# Source is the second parent of the merge commit (MERGE_HEAD may be gone).
+other=""
+if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+    other="$(merged_branch)"
+elif git rev-parse -q --verify HEAD^2 >/dev/null 2>&1; then
+    other="$(git name-rev --name-only "$(git rev-parse HEAD^2)" 2>/dev/null \
+        | sed 's|^refs/remotes/origin/||; s|^origin/||; s|~[0-9]*$||; s|\^[0-9]*$||')"
+fi
+
+if [ -n "$other" ] && feature_branch_name "$other" \
+    && git rev-parse --verify --quiet "$other" >/dev/null 2>&1; then
+    if git branch -d "$other" >/dev/null 2>&1; then
+        echo "islet: merged feature branch '${other}' deleted locally" >&2
+    else
+        echo "islet: could not delete local branch '${other}' (do it manually)" >&2
+    fi
+    if git ls-remote --exit-code --heads origin "$other" >/dev/null 2>&1; then
+        if git push origin --delete "$other" >/dev/null 2>&1; then
+            echo "islet: remote branch 'origin/${other}' deleted" >&2
+        else
+            echo "islet: could not delete remote branch '${other}' (do it manually)" >&2
+        fi
+    fi
+fi
+
+exit 0
