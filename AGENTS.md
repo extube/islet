@@ -24,7 +24,12 @@ containers. It currently supports
   npm install -g, gem, go) are captured there and persist across runs —
   the derived image sets `PATH`/`NPM_CONFIG_PREFIX`/`GOPATH`/`GEM_HOME`/
   `PYTHONUSERBASE` prefixes into the deps dir plus an `apk` wrapper
-  (`/usr/local/bin/apk`, `apk --root .../deps-alpine rootfs`). The
+  (`/usr/local/bin/apk`, `apk --root .../deps-alpine rootfs`). Agent
+  extension/runtime caches are persisted too: `PI_CODING_AGENT_DIR`
+  redirects pi's agent dir (`~/.pi/agent`: extensions, skills, themes,
+  auth) into the mounted config volume, and opencode's npm-plugin cache
+  (`~/.cache/opencode`) is mounted from
+  `~/.config/islet/<name>/opencode-cache`. The
   setup wizard now has six steps (name, image, preinstall multi-select,
   config volume, network, environment) writing `preinstall` into
   config.json — that wizard (setup) is the place where deps are picked;
