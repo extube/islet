@@ -14,10 +14,34 @@ containers. It currently supports
 - `islet.sh` — stable script. Config-driven runner: `islet.sh [name]
   [workspace]` runs the selected agent (sessions and auth persist on the
   host), `-v host:container[,...]` adds one-off extra volume mounts, and
-  `islet.sh ps` lists running islet containers. `islet.sh rm
-  [name]` removes one agent piece from config.json (empty `$schema`/
-  `container` keys are dropped when it was the last agent); bare
-  `islet.sh rm` uninstalls — after a `y/N` prompt it removes the
+  `islet.sh ps` lists running islet containers. Dependencies are
+  config-driven: `agent.<name>.preinstall` is baked into a derived image
+  (`islet-pre:<name>-<hash(base image + deps)>`, via `run_deps_image`,
+  cached so it survives rebuilds and is only rebuilt when deps or the
+  base image change). Persistence is a per-agent data folder
+  `~/.config/islet/<name>/` created automatically: `deps/` is mounted at
+  `/opt/islet-tools` and `/root/.local` so installs made *during* a run
+  (apk add, pip --user, npm install -g, gem, go) are captured there and
+  persist across runs; `config/` is mounted at the agent's config dir
+  (opencode `/root/.config/opencode`, hermes `/root/.config/hermes`,
+  pi `/root/.config/pi` + `PI_CODING_AGENT_DIR` env redirect); `sessions/`
+  at the agent data dir; `opencode-cache/` at `/root/.cache/opencode`
+  (npm-plugin cache). The derived image sets
+  `PATH`/`NPM_CONFIG_PREFIX`/`GOPATH`/`GEM_HOME`/`PYTHONUSERBASE`
+  prefixes into the deps dir plus an `apk` wrapper (`/usr/local/bin/apk`,
+  `apk --root .../deps-alpine rootfs`). The setup wizard has five steps
+  (name, image, preinstall multi-select, network, environment) — that
+  wizard (setup) is the place where deps are picked; flags (`--name`,
+  `--image`, `--preinstall`, `--config-volume`, `--network`, `--env`)
+  skip their step with the given value (flagged values are validated;
+  steps without a flag are still prompted); `volume_config`/
+  `volume_libs`/`volume_sessions` in config.json remain optional
+  overrides of the agent-folder dirs. `islet.sh create` generates a bare
+  agent Dockerfile (fixed runtime, no preinstall step) and `islet.sh
+  build` just docker-builds it.
+  `islet.sh rm [name]` removes one agent piece from config.json (empty
+  `$schema`/`container` keys are dropped when it was the last agent);
+  bare `islet.sh rm` uninstalls — after a `y/N` prompt it removes the
   islet-installed commands (`islet`, `islet-dev`) from `~/.local/bin`
   and deliberately keeps the config folder and `config.json` (the
   installer also preserves an existing config).
@@ -88,16 +112,24 @@ Stored at `~/.config/islet/config.json` (override location with the
       "network": "host | bridge",
       "ports": ["8080:8080"],
       "environment": { "API_KEY": "..." },
-      "preinstall": ["Node.js"],
-      "agent_config_dir": "~/.config/opencode",
-      "agent_config_mount": "/root/.config/opencode"
+      "preinstall": ["Node.js"]
     }
   }
 }
 ```
 
-Note: `preinstall` is applied by `islet-dev.sh` via derived images (above);
-`islet.sh` still runs the plain configured image.
+Persistence needs no config: everything lives in the per-agent data
+folder `~/.config/islet/<name>/` (deps/, config/, sessions/,
+opencode-cache/, deps/apk-cache/ — see the islet.sh notes above);
+`volume_config` / `volume_libs` / `volume_sessions` remain optional
+per-entry overrides (and `--config-volume` at setup).
+
+Note: `preinstall` is applied by both runners (`islet.sh` and
+`islet-dev.sh`) via derived images (above); `islet.sh` additionally
+captures runtime installs in the per-agent deps dir
+`~/.config/islet/<name>/deps` (hub layout: `npm/` global packages,
+`alpine/` apk rootfs, `apk-cache/` download cache, plus user-space
+installs from `/root/.local`).
 
 ## Requirements
 

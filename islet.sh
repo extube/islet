@@ -42,7 +42,7 @@ print_help() {
 islet (dev) — run AI agents in isolated Docker containers
 
 Usage:
-  $SCRIPT_NAME create [file]        Create a Dockerfile (agent + preinstall env)
+  $SCRIPT_NAME create [file]        Create a Dockerfile (opencode/pi/hermes)
   $SCRIPT_NAME build [file]         Build an agent image from a Dockerfile
   $SCRIPT_NAME setup                Add a new agent entry to config.json
   $SCRIPT_NAME [name] [workspace]   Run an agent from config
@@ -51,26 +51,39 @@ Usage:
   $SCRIPT_NAME --help               Show this help message
 
 setup:
-  Five steps, each with a default (agent name, image, agent config volume,
-  network, environment); the entry is merged into config.json.
-  Then build it and add the image to config.json:
-    $SCRIPT_NAME create opencode.Dockerfile
-    $SCRIPT_NAME build opencode.Dockerfile
+  Five steps, each with a default (agent name, image, preinstall
+  environment, network, environment); the entry is merged into
+  config.json ("preinstall" included — see run below).
+  Persistence is per agent folder: ~/.config/islet/<name>/ mounts
+  deps/, config/ and sessions/ into the container automatically —
+  config.json needs no volume keys.
+  Flags skip steps: --name <agent>, --image <img>,
+  --preinstall <a,b,...>, --config-volume <dir>, --network <host|bridge>,
+  --env <KEY=V[,K2=V2]>
   (see README "Adding an agent to config.json")
 
 build:
   docker build -t islet/<agent>:latest -f <file> <dir>
+  (manual route: generate a Dockerfile with "create", tag the image and
+  point the config entry's "image" at it)
 
 Run:
   name        agent name (default: the "container" from config)
   workspace   directory to mount at /workspace (default: current dir);
               arguments are order-free
-  Volumes persisted across runs (from config.json):
-    volume_libs    — installed libs (apk cache)
-    volume_config  — agent config, default ~/.config/<agent-name>
-    Sessions/auth are saved to ~/.local/share/islet/<agent-name>-sessions
-    on the host (override with "volume_sessions" in config.json) and
-    mounted at /root/.local/share/<agent-name>, so they survive --rm runs.
+  On the first run the "preinstall" list from config.json is baked into a
+  per-agent derived image (islet-pre:<name>-<keyed hash>; rebuilt only when
+  deps or the base image change).
+  Volumes persisted across runs (all under ~/.config/islet/<name>/):
+    deps/          — agent tool store mounted at /opt/islet-tools and
+                     /root/.local; installs made during a run (apk add,
+                     pip --user, npm -g, gem, go) survive into the next run
+    config/        — agent config (plugins, extensions, auth, themes)
+                     mounted at the agent's config dir in the container
+    sessions/      — saved sessions/auth data dir, mounted at the agent's
+                     data dir; survive --rm runs and Docker restarts
+    volume_libs / volume_config / volume_sessions in config.json override
+    the corresponding dirs (or use --config-volume at setup)
   -v host_path:container_path[,host2:container2,...]
               extra bind mounts for this run (e.g. ~/.ssh:/root/.ssh:ro);
               comma-separated, mounted in addition to config.json volumes
@@ -220,21 +233,28 @@ run_agent() {
     die "unknown agent: $name (available: $available)"
   fi
 
-  local image volume_libs volume_config volume_sessions network
-  local container_name=''
-  image="$(cfg_get --arg b "$name" '.agent[$b].image')"
+  local base_image volume_libs volume_config volume_sessions network deps_dir
+  local container_name='' cache_dir='' fixed_env=()
+
+  base_image="$(cfg_get --arg b "$name" '.agent[$b].image')"
   network="$(cfg_get --arg b "$name" '.agent[$b].network // "host"')"
-  # Volume for installed libs (apk cache) — one dir per agent, shared across
-  # runs so downloaded packages/libs survive container and docker restarts.
+
+  # Per-agent data folder: ~/.config/islet/<name>/ groups every persistent
+  # piece of one agent:
+  #   deps/     — agent tool store (apk rootfs, npm/go/gem/pip libs, apk cache)
+  #   config/   — agent configuration (plugins, extensions, auth, themes)
+  #   sessions/ — saved sessions/auth data dir
+  # Each entry in config.json only references its agent implicitly; the
+  # volume_* keys below stay as optional overrides.
+  local data_dir
+  data_dir="${ISLET_CONFIG_DIR}/${name}"
+  deps_dir="${data_dir}/deps"
   volume_libs="$(cfg_get --arg b "$name" '.agent[$b].volume_libs // ""')"
-  volume_libs="${volume_libs:-${HOME}/.local/share/islet/${name}-libs}"
-  # Volume for agent's own config (~/.config/<agent-name> by default).
+  volume_libs="${volume_libs:-${deps_dir}/apk-cache}"
   volume_config="$(cfg_get --arg b "$name" '.agent[$b].volume_config // ""')"
-  volume_config="${volume_config:-${HOME}/.config/${name}}"
-  # Volume for saved sessions/auth (the agent's data dir, e.g. opencode's
-  # .local/share/opencode) — persists across --rm container runs.
+  volume_config="${volume_config:-${data_dir}/config}"
   volume_sessions="$(cfg_get --arg b "$name" '.agent[$b].volume_sessions // ""')"
-  volume_sessions="${volume_sessions:-${HOME}/.local/share/islet/${name}-sessions}"
+  volume_sessions="${volume_sessions:-${data_dir}/sessions}"
   volume_libs="${volume_libs/#\~/$HOME}"
   volume_config="${volume_config/#\~/$HOME}"
   volume_sessions="${volume_sessions/#\~/$HOME}"
@@ -265,7 +285,8 @@ run_agent() {
 
   [[ -d "$workspace" ]] || die "workspace directory does not exist: $workspace"
   workspace="$(cd "$workspace" && pwd)"
-  mkdir -p "$volume_libs" "$volume_config" "$volume_sessions"
+  mkdir -p "$deps_dir" "$volume_libs" "$volume_config" "$volume_sessions"
+  [[ -n "$cache_dir" ]] && mkdir -p "$cache_dir"
 
   # In-container paths of the agent's config and data dirs. They must match
   # what the agent itself reads — not the config entry name: an agent named
@@ -274,7 +295,7 @@ run_agent() {
   local agent_kind
   agent_kind="$(cfg_get --arg b "$name" '.agent[$b].agent // ""')"
   if [[ -z "$agent_kind" ]]; then
-    case "$image" in
+    case "$base_image" in
       *opencode*) agent_kind='opencode' ;;
       *pi*) agent_kind='pi' ;;
       *hermes*) agent_kind='hermes' ;;
@@ -288,7 +309,28 @@ run_agent() {
   *) run_config_dir="/root/.config/${name}"; run_data_dir="/root/.local/share/${name}" ;;
   esac
 
+  # pi keeps extensions, skills, themes, prompts and auth in its agent dir
+  # (~/.pi/agent by default). Redirect it into the persisted config volume.
+  if [[ "$agent_kind" == 'pi' ]]; then
+    fixed_env+=(--env "PI_CODING_AGENT_DIR=$run_config_dir")
+  elif [[ "$agent_kind" == 'opencode' ]]; then
+    # npm plugins are installed into ~/.cache/opencode at startup.
+    cache_dir="${data_dir}/opencode-cache"
+  fi
+
+  # Per-agent runtime image: preinstall deps from config are baked into a
+  # derived image (<name>-<hash(base image + deps)>), which is also where the
+  # capture environment lives — PATH prefixes and package-manager prefixes
+  # pointing into the mounted deps dir, and an apk wrapper installing into
+  # the deps dir too. Runtime installs therefore persist across runs.
+  local -a preinstall=()
+  mapfile -t preinstall < <(
+    cfg_get --arg b "$name" '.agent[$b].preinstall // [] | .[]' || true
+  )
+
   require_cmd docker
+  local image
+  image="$(run_deps_image "$name" "$base_image" ${preinstall[@]+"${preinstall[@]}"})"
 
   # Build the docker command line.
   local -a docker_args=(run --rm -it)
@@ -309,6 +351,7 @@ run_agent() {
   while IFS= read -r env_pair; do
     docker_args+=(--env "$env_pair")
   done < <(cfg_get --arg b "$name" '.agent[$b].environment // {} | to_entries[] | "\(.key)=\(.value)"')
+  docker_args+=("${fixed_env[@]+${fixed_env[@]}}")
 
   docker_args+=(
     --workdir /workspace
@@ -316,7 +359,18 @@ run_agent() {
     --volume "$volume_config:$run_config_dir"
     --volume "$volume_sessions:$run_data_dir"
     --volume "$volume_libs:/var/cache/apk"
+    # agent tool store: one source, mounted twice — /opt/islet-tools is the
+    # canonical hub (PATH/PM prefixes live there), /root/.local is where
+    # pip --user and other home-relative installers go.
+    --volume "$deps_dir:/opt/islet-tools"
+    --volume "$deps_dir:/root/.local"
   )
+  if [[ -n "$cache_dir" ]]; then
+    docker_args+=(
+      # opencode npm-plugin cache: installed once, reloaded after restart.
+      --volume "$cache_dir:/root/.cache/opencode"
+    )
+  fi
   local extra
   for extra in "${extra_volumes[@]}"; do
     docker_args+=(--volume "$extra")
@@ -325,6 +379,7 @@ run_agent() {
 
   echo "Agent:     $name"
   echo "Image:     $image"
+  echo "Deps:      $deps_dir (persisted across runs)"
   echo "Workspace: $workspace"
 
   exec docker "${docker_args[@]}"
@@ -468,8 +523,8 @@ multichoice() {
   return 0
 }
 
-# preinstall_pkgs <dep>... — maps preinstall environment items to the
-# Alpine package names baked into the generated Dockerfile.
+# preinstall_pkgs <dep>... — maps preinstall environment items (as stored
+# in config.json) to the Alpine package names baked into the derived image.
 preinstall_pkgs() {
   local out='' dep
   for dep in "$@"; do
@@ -487,13 +542,14 @@ preinstall_pkgs() {
   printf '%s' "${out# }"
 }
 
-# dockerfile_for <agent> [extra-apk-packages] — print a Dockerfile for the
-# supported agents (Alpine base: opencode and hermes runtime installs, pi on
-# node:24-alpine). Selected preinstall deps are baked in as apk packages, so
-# the environment survives every container restart.
+# dockerfile_for <agent> — print a Dockerfile for the supported agents
+# (Alpine base: opencode/opencode v2 and hermes runtime installs, pi on
+# node:24-alpine). No preinstall deps here — those are picked in
+# `islet setup`, stored in config.json and baked into the derived image at
+# run time.
 dockerfile_for() {
-  local extra_pkgs
-  extra_pkgs="$(preinstall_pkgs "${@:2}")"
+  local agent="$1"
+  shift
 
   case "$agent" in
   opencode)
@@ -502,13 +558,32 @@ dockerfile_for() {
 FROM alpine:latest
 
 RUN apk add --no-cache \\
-      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata${extra_pkgs:+ \\
-      $extra_pkgs}
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
 
-# Install the opencode binary.
-# SHELL must be set — the installer expands ${SHELL:?} (unset under busybox).
+# Install the opencode binary. The installer needs bash (not busybox sh) —
+# installed by the apk line above.
 ENV SHELL=/bin/sh
-RUN curl -fsSL https://opencode.ai/install | sh
+RUN curl -fsSL https://opencode.ai/install | bash
+ENV PATH="/root/.opencode/bin:\${PATH}"
+
+RUN mkdir -p /workspace /root/.config/opencode
+WORKDIR /workspace
+
+ENTRYPOINT ["opencode"]
+EOF
+    ;;
+  opencode2)
+    cat <<EOF
+# opencode v2 agent harness — Alpine, runtime setup baked at build time.
+FROM alpine:latest
+
+RUN apk add --no-cache \\
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
+
+# Install the opencode v2 binary. The installer needs bash (not busybox sh)
+# — installed by the apk line above.
+ENV SHELL=/bin/sh
+RUN curl -fsSL https://opencode.ai/v2/install | bash
 ENV PATH="/root/.opencode/bin:\${PATH}"
 
 RUN mkdir -p /workspace /root/.config/opencode
@@ -522,7 +597,7 @@ EOF
 # pi coding agent — Alpine, Node.js runtime.
 FROM node:24-alpine
 
-RUN apk add --no-cache bash ca-certificates git ripgrep${extra_pkgs:+ $extra_pkgs}
+RUN apk add --no-cache bash ca-certificates git ripgrep
 
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
@@ -538,8 +613,7 @@ EOF
 FROM alpine:latest
 
 RUN apk add --no-cache \\
-      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata${extra_pkgs:+ \\
-      $extra_pkgs}
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
 
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ENV PATH="/root/.hermes/bin:\${PATH}"
@@ -550,15 +624,14 @@ WORKDIR /workspace
 ENTRYPOINT ["hermes"]
 EOF
     ;;
-  *) die "unsupported agent: $agent (supported: opencode, pi, hermes)" ;;
+  *) die "unsupported agent: $agent (supported: opencode, opencode2, pi, hermes)" ;;
   esac
 }
 
-# run_create [file] — two interactive steps:
-#   1. choose the agent (pi/opencode/hermes)
-#   2. multi-select the preinstall environment (Git, Node.js, Go, Java,
-#      Python, Rust, Ruby, C/C++) — baked into the image as apk packages,
-#      so the environment survives every container restart.
+# run_create [file] — one interactive step: choose the agent
+# (opencode/pi/hermes). No preinstall selection here — deps are picked in
+# `islet setup` only, stored in config.json and baked into the derived
+# image on the next run.
 #   The Dockerfile is written to the given location: <file> is treated as
 #   a directory -> <dir>/<agent>.Dockerfile, or a filename -> used as-is.
 run_create() {
@@ -569,20 +642,18 @@ run_create() {
 
   printf '%sStep 1: agent%s\n' "$C_BOLD" "$C_RESET" >&2
   printf '  %s1)%s opencode\n' "$C_GREEN" "$C_RESET"
-  printf '  %s2)%s pi\n' "$C_GREEN" "$C_RESET"
-  printf '  %s3)%s hermes\n' "$C_GREEN" "$C_RESET"
+  printf '  %s2)%s opencode v2\n' "$C_GREEN" "$C_RESET"
+  printf '  %s3)%s pi\n' "$C_GREEN" "$C_RESET"
+  printf '  %s4)%s hermes\n' "$C_GREEN" "$C_RESET"
   local choice
   choice="$(ask 'Select agent' '1')"
   case "$choice" in
   1) agent='opencode' ;;
-  2) agent='pi' ;;
-  3) agent='hermes' ;;
+  2) agent='opencode2' ;;
+  3) agent='pi' ;;
+  4) agent='hermes' ;;
   *) die "invalid choice: $choice" ;;
   esac
-
-  printf '%sStep 2: preinstall environment%s\n' "$C_BOLD" "$C_RESET" >&2
-  local -a preinstall=()
-  multichoice preinstall 'Git' 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
 
   local file="$target"
   if [[ -z "$file" ]]; then
@@ -594,11 +665,67 @@ run_create() {
   fi
 
   mkdir -p "$(cd "$(dirname "$file")" && pwd)"
-  dockerfile_for "$agent" "${preinstall[@]}" >"$file"
+  dockerfile_for "$agent" >"$file"
   printf '%s✔ Dockerfile written to %s%s\n' "$C_GREEN" "$file" "$C_RESET"
-  ((${#preinstall[@]})) && printf '  preinstall: %s\n' "${preinstall[*]}"
+  printf '  preinstall deps are picked in %s setup%s (saved to config.json)\n' "$C_BOLD" "$C_RESET"
   printf '  next: %s build %s\n' "$SCRIPT_NAME" "$file"
   return 0
+}
+
+# run_deps_image <name> <base-image> [dep]... — bake the preinstall list into
+# a per-agent derived image, and arm the capture environment for runtime
+# installs (PATH prefixes, package-manager prefixes, apk wrapper). The tag is
+# keyed by a hash of base image + dep list, so Docker's cache keeps it across
+# runs; it is rebuilt only when the deps or the base image change.
+run_deps_image() {
+  local name="$1" base="$2"
+  shift 2
+
+  local depkey tag pkg deps_desc
+  local -a pkgs=()
+  for pkg in $(preinstall_pkgs "$@"); do pkgs+=("$pkg"); done
+  deps_desc="$*"
+
+  depkey="$(printf '%s|%s' "$base" "$deps_desc" | sha256sum | cut -c1-10)"
+  tag="islet-pre:${name}-${depkey}"
+
+  if docker image inspect "$tag" >/dev/null 2>&1; then
+    printf '%s' "$tag"
+    return 0
+  fi
+
+  printf '%sBaking dependencies (%s) into %s%s\n' \
+    "$C_BOLD" "${deps_desc:-none}" "$tag" "$C_RESET" >&2
+
+  local df
+  df="$(mktemp)"
+  {
+    printf 'FROM %s\n' "$base"
+    if ((${#pkgs[@]} > 0)); then
+      printf 'RUN apk add --no-cache'
+      printf ' %s' "${pkgs[@]}"
+      printf '\n'
+    fi
+    cat <<'CAPTURE'
+RUN mkdir -p /usr/local/bin \
+  && printf '%s\n' \
+      '#!/bin/sh' \
+      'exec /sbin/apk --root /opt/islet-tools/alpine --initdb --no-cache "$@"' \
+      > /usr/local/bin/apk \
+  && chmod +x /usr/local/bin/apk
+ENV PATH="/opt/islet-tools/alpine/usr/bin:/opt/islet-tools/alpine/usr/sbin:/opt/islet-tools/bin:/opt/islet-tools/npm/bin:/opt/islet-tools/go/bin:/opt/islet-tools/pyuser/bin:/opt/islet-tools/gems/bin:/opt/islet-tools/cargo/bin:/root/.local/bin:${PATH}"
+ENV NPM_CONFIG_PREFIX=/opt/islet-tools/npm
+ENV GOPATH=/opt/islet-tools/go
+ENV GEM_HOME=/opt/islet-tools/gems
+ENV PYTHONUSERBASE=/opt/islet-tools/pyuser
+ENV LD_LIBRARY_PATH=/opt/islet-tools/alpine/usr/lib:/opt/islet-tools/alpine/lib
+CAPTURE
+  } >"$df"
+
+  docker build -t "$tag" -f "$df" . >/dev/null
+  rm -f "$df"
+
+  printf '%s' "$tag"
 }
 
 # run_build [file] — docker build the given Dockerfile and tag the image
@@ -624,77 +751,173 @@ run_build() {
 # run_setup — interactive wizard adding a new agent entry into config.json:
 #   step 1: agent name           (default: agent)
 #   step 2: image                (default: ghcr.io/anomalyco/opencode:latest)
-#   step 3: agent config volume  (default: ~/.config/<agent-name>)
+#   step 3: preinstall env       (multi-select, saved as .preinstall)
 #   step 4: network              (default: host)
 #   step 5: environment          (KEY=VALUE,KEY=VALUE; default: none)
-# volume_libs defaults to ~/.local/share/islet/<agent-name>-libs; ports []
-# unless edited by hand (see README).
+# The preinstall list is baked into a per-agent derived image on the first
+# run; runtime installs are captured in ~/.config/islet/<name>/deps.
+# Persistence is automatic — every agent owns ~/.config/islet/<name>/
+# (deps/, config/ and sessions/ are mounted into the container); only the
+# optional --config-volume flag writes an explicit volume_config override.
+# Flags skip their step with the given value (--name, --image,
+# --preinstall 'a,b', --config-volume <dir>, --network host|bridge,
+# --env 'KEY=V,K2=V2'); steps without a flag are still prompted.
 run_setup() {
   require_cmd jq
 
+  # --- flags: fill values without the TUI --------------------------------
+  local opt_name='' opt_image='' opt_preinstall='' opt_config_volume=''
+  local opt_network='' opt_env=''
+  local opt_usage='setup [flags]
+flags:
+  --name <agent>              step 1
+  --image <docker-image>      step 2
+  --preinstall <a,b,...>      step 3 (Git,Node.js,Go,Java,Python,Rust,Ruby,C/C++)
+  --config-volume <dir>       step 4 (host dir mounted as agent config)
+  --network <host|bridge>     step 5
+  --env <KEY=V[,KEY2=V2]>     step 6'
+  while (($#)); do
+    case "$1" in
+    --name | --image | --preinstall | --config-volume | --network | --env)
+      [[ -n "${2:-}" ]] || die "missing value for $1
+$opt_usage"
+      local flag="$1"
+      case "$flag" in
+      --name) opt_name="$2" ;;
+      --image) opt_image="$2" ;;
+      --preinstall) opt_preinstall="$2" ;;
+      --config-volume) opt_config_volume="$2" ;;
+      --network) opt_network="$2" ;;
+      --env) opt_env="$2" ;;
+      esac
+      shift 2
+      ;;
+    -h | --help)
+      printf '%s\n' "$opt_usage"
+      return 0
+      ;;
+    *)
+      die "unknown setup argument: $1
+$opt_usage"
+      ;;
+    esac
+  done
+
   step_header 1 'Agent name'
   local name
-  name="$(ask 'Agent name' 'agent')"
+  if [[ -n "$opt_name" ]]; then
+    name="$opt_name"
+  else
+    name="$(ask 'Agent name' 'agent')"
+  fi
 
   step_header 2 'Image'
   local image
-  image="$(ask 'Docker image' "$OPENCODE_IMAGE_DEFAULT")"
+  if [[ -n "$opt_image" ]]; then
+    image="$opt_image"
+  else
+    image="$(ask 'Docker image' "$OPENCODE_IMAGE_DEFAULT")"
+  fi
 
-  step_header 3 'Agent config volume'
-  local volume_config
-  volume_config="$(ask 'Agent config volume' "~/.config/$name")"
+  step_header 3 'Preinstall environment'
+  # Baked into the derived image on the next run; runtime installs by the
+  # agent are captured in the per-agent deps dir regardless.
+  local -a preinstall=()
+  if [[ -n "$opt_preinstall" ]]; then
+    local dep
+    local -a known=(Git Node.js Go Java Python Rust Ruby C/C++)
+    IFS=',' read -r -a preinstall <<<"${opt_preinstall// /}"
+    for dep in "${preinstall[@]}"; do
+      if (( ${#dep} == 0 )); then
+        continue
+      fi
+      if ! printf '%s\n' "${known[@]}" | grep -Fxq "$dep"; then
+        die "unknown preinstall dep: $dep (known: ${known[*]})"
+      fi
+    done
+  else
+    multichoice preinstall 'Git' 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
+  fi
+
+  # config/ dir is derived (step removed): ~/.config/islet/<name>/config is
+  # mounted automatically as the agent's config; --config-volume overrides.
+  local volume_config=''
+  [[ -n "$opt_config_volume" ]] && volume_config="$opt_config_volume"
 
   step_header 4 'Network'
-  printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
-  printf '  %s2)%s bridge (publish ports in config.json)\n' "$C_YELLOW" "$C_RESET"
   local network
-  printf -v network '%s' "$(ask 'Select' '1')"
-  case "$network" in
-  2) network='bridge' ;;
-  *) network='host' ;;
-  esac
+  if [[ -n "$opt_network" ]]; then
+    case "$opt_network" in
+    host | bridge) network="$opt_network" ;;
+    *) die "invalid --network value: $opt_network (host|bridge)" ;;
+    esac
+  else
+    printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
+    printf '  %s2)%s bridge (publish ports in config.json)\n' "$C_YELLOW" "$C_RESET"
+    printf -v network '%s' "$(ask 'Select' '1')"
+    case "$network" in
+    2) network='bridge' ;;
+    *) network='host' ;;
+    esac
+  fi
 
   step_header 5 'Environment variables'
   local -a env_pairs=()
-  local env_input
-  while true; do
-    env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
-    [[ -z "$env_input" ]] && break
+  local env_input="$opt_env"
+  if [[ -n "$opt_env" ]]; then
     if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
       IFS=',' read -r -a env_pairs <<<"$env_input"
-      break
+    else
+      die "invalid --env value: $opt_env
+Example: API_KEY=secret,FOO=bar"
     fi
-    printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
-  done
+  else
+    while true; do
+      env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
+      [[ -z "$env_input" ]] && break
+      if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
+        IFS=',' read -r -a env_pairs <<<"$env_input"
+        break
+      fi
+      printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
+    done
+  fi
 
   # --- save into config.json (merge; sibling agents are kept) --------------
   mkdir -p "$(dirname "$ISLET_CONFIG")"
   [[ -f "$ISLET_CONFIG" ]] || jq -n '{"$schema": "islet.sh"}' >"$ISLET_CONFIG"
-  local env_json volume_libs
+  local env_json preinstall_json
   if ((${#env_pairs[@]} > 0)); then
     env_json="$(printf '%s\n' "${env_pairs[@]}" |
       jq -R 'split("=") | {(.[0]): .[1]}' | jq -s 'add // {}')"
   else
     env_json='{}'
   fi
-  volume_libs="~/.local/share/islet/${name}-libs"
+  # preinstall: multi-select names, stored verbatim (image build maps them
+  # to Alpine packages; e.g. Node.js -> nodejs npm).
+  if ((${#preinstall[@]} > 0)); then
+    preinstall_json="$(printf '%s\n' "${preinstall[@]}" | jq -R . | jq -s .)"
+  else
+    preinstall_json='[]'
+  fi
 
   local agent_json
   agent_json="$(jq -n \
     --arg image "$image" \
-    --arg volume_libs "$volume_libs" \
     --arg volume_config "$volume_config" \
     --arg network "$network" \
     --argjson ports '[]' \
     --argjson environment "$env_json" \
+    --argjson preinstall "$preinstall_json" \
     '{
       image: $image,
-      volume_libs: $volume_libs,
-      volume_config: $volume_config,
+      preinstall: $preinstall,
       network: $network,
       ports: $ports,
       environment: $environment
-    }')"
+    }
+    | if $volume_config == "" then . else .volume_config = $volume_config end
+    ')"
 
   local merge_filter='
     .agent = ((.agent // {}) + {($key): $agent})
@@ -709,6 +932,9 @@ run_setup() {
 
   printf '%s✔ Agent %s%s%s saved to %s%s\n' \
     "$C_GREEN" "$C_BOLD" "$name" "$C_RESET" "$ISLET_CONFIG" "$C_RESET"
+  if ((${#preinstall[@]} > 0)); then
+    printf '  preinstall: %s\n' "${preinstall[*]}"
+  fi
   printf '  run it now: %s %s <workspace>%s\n' "$C_BOLD" "$name" "$C_RESET"
   return 0
 }
