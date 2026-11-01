@@ -40,9 +40,10 @@ Option A — from a Dockerfile (agent built into the image):
    islet build ~/my-agents/opencode.Dockerfile
    ```
 
-3. **Register it in the config** with the 6-step `islet setup` wizard
+3. **Register it in the config** with the 5-step `islet setup` wizard
    (each step has a default — agent name, image, preinstall environment,
-   agent config volume, network, environment variables). Point `image` at
+   network, environment variables; agent data dirs are created
+   automatically under `~/.config/islet/<name>`). Point `image` at
    `islet/<agent>:latest`; or fill steps headless with flags that skip
    their step:
 
@@ -69,7 +70,6 @@ into a per-agent derived image automatically on the first run:
     "opencode": {
       "image": "islet/opencode:latest",
       "preinstall": ["Node.js"],
-      "volume_config": "~/.config/opencode",
       "network": "host",
       "ports": [],
       "environment": {}
@@ -83,20 +83,20 @@ into a per-agent derived image automatically on the first run:
      (Git, Node.js, Go, Java, Python, Rust, Ruby, C/C++); baked into a
      derived image `islet-pre:<name>-<keyed hash>` on the first run and
      rebuilt only when the list or the base image changes
-   - deps dir — `~/.config/islet/<agent-name>/deps` next to `config.json`;
-     the agent's tool store, mounted at `/opt/islet-tools` and
-     `/root/.local` in the container: libraries and programs installed
-     **during a run** (apk add, pip --user, npm install -g, gem install,
-     go install, ...) are captured here and are still available on the
-     next run of the same agent
-   - `volume_libs` — optional override of the apk download cache
-     (default `<deps dir>/apk-cache`, mounted at `/var/cache/apk`)
-   - `volume_config` — agent config dir (default `~/.config/<agent-name>`,
-     mounted at `/root/.config/<agent-name>` in the container)
-   - `volume_sessions` — optional override of the saved sessions dir
-     (default `~/.local/share/islet/<agent-name>-sessions`, mounted at
-     `/root/.local/share/<agent-name>`; e.g. opencode keeps its
-     sessions/auth in that data dir). Not normally set by hand.
+   - **agent data folder** — `~/.config/islet/<agent-name>/`, created
+     automatically; all persistent state of one agent lives here and is
+     mounted into the container on every run (no volume keys needed):
+
+     | host dir (under `~/.config/islet/<name>/`) | container path | contents |
+     |---|---|---|
+     | `deps/` | `/opt/islet-tools` + `/root/.local` | apk rootfs, npm `-g` (`npm/`), go (`go/`), gem (`gems/`), pip user packages (`pyuser/`), apk download cache (`apk-cache/`) |
+     | `config/` | agent config dir — `/root/.config/opencode`, `/root/.config/pi` (+`PI_CODING_AGENT_DIR`, pi reads `~/.pi/agent`-style paths from there), `/root/.config/hermes` | plugins, extensions, themes, auth, agent settings |
+     | `sessions/` | agent data dir — `/root/.local/share/opencode` etc. | sessions, saved state |
+     | `opencode-cache/` (opencode only) | `/root/.cache/opencode` | npm plugin cache |
+
+   - `volume_config` — optional override of the `config/` dir above
+     (also `--config-volume` at `islet setup`); `volume_libs` / 
+     `volume_sessions` similarly override the apk cache / sessions dirs
    - `network` — `host` or `bridge`
    - `ports` — `<port>:<port>` list for `network: bridge`
    - `environment` — `KEY: value` map passed to the container
@@ -109,17 +109,16 @@ into a per-agent derived image automatically on the first run:
 
 ### Where agent extensions/plugins live (and how they persist)
 
-- **opencode** — local plugins: `~/.config/opencode/plugins/` (the
-  `volume_config` dir, persisted); npm plugins declared in
-  `opencode.json` are installed into `~/.cache/opencode/node_modules/`,
-  which islet persists in `~/.config/islet/<name>/opencode-cache` and
-  reuses on the next run.
+- **opencode** — local plugins: `<agent folder>/config/plugins/` (the
+  agent data folder's `config/` dir, mounted at
+  `/root/.config/opencode`); npm plugins declared in `opencode.json`
+  live in `/root/.cache/opencode`, persisted as
+  `<agent folder>/opencode-cache/`.
 - **pi** — extensions, skills, themes, prompts and auth live in the pi
-  agent dir (`~/.pi/agent` by default); islet sets
-  `PI_CODING_AGENT_DIR=/root/.config/pi`, so they all live inside the
-  persisted `volume_config` dir (`~/.config/pi`).
-- Anything an agent pip/npm/apk/gem/go-installs during a run lands in the
-  deps dir (`~/.config/islet/<name>/deps`) regardless.
+  agent dir; islet sets `PI_CODING_AGENT_DIR=/root/.config/pi`, so they
+  all live in `<agent folder>/config/`.
+- Anything an agent pip/npm/apk/gem/go-installs during a run lands in
+  the agent folder's `deps/` regardless.
 
 ### One-off volume mounts (`-v`)
 
@@ -148,7 +147,7 @@ islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
 
 ```sh
 islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
-islet setup                # 6-step wizard: add an agent entry to config.json
+islet setup                # 5-step wizard: add an agent entry to config.json
 islet setup --name pi --image img:pi --preinstall 'Node.js,Go' \
   --config-volume ~/.config/pi --network bridge --env 'K=v'
                            # flags skip their wizard step (value from flag)
@@ -170,17 +169,16 @@ Without the installed command, use `./islet.sh` with the same arguments.
 - Mounts your workspace at `/workspace` inside the container.
 - Multi-agent configs: each entry can set its own image, preinstall list,
   volumes, network, ports and environment variables.
-- Persisted volumes: agent config (`volume_config`), saved sessions
-  (`~/.local/share/islet/<agent-name>-sessions`) and the per-agent deps
-  dir (`~/.config/islet/<agent-name>/deps`), so config, sessions and
-  packages survive `--rm` runs and Docker restarts.
+- Persisted state lives in one agent folder:
+  `~/.config/islet/<agent-name>/` — `deps/` (tool store), `config/`
+  (agent config) and `sessions/` (sessions/auth) are mounted into the
+  container automatically; `volume_config` / `volume_libs` /
+  `volume_sessions` in config.json can override each of them.
 - Both image-baked (`preinstall`) and runtime installs (the agent's own
   `apk add`, `pip --user`, `npm install -g`, `gem install`, `go install`,
-  ...) survive: runtime installs land in the deps dir via a redirected
+  ...) survive: runtime installs land in the `deps/` dir via a redirected
   package-manager environment (and an `apk` wrapper that installs into
   the deps-dir rootfs).
-- `volume_config` defaults to `~/.config/<agent-name>` on the host,
-  mounted at `/root/.config/<agent-name>`.
 - Interactive TTY; the container is removed automatically on exit.
 - `islet rm` (uninstall) removes only the installed `islet` commands; the
   islet config folder and `config.json` are kept, so reinstalling preserves

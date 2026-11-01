@@ -51,9 +51,12 @@ Usage:
   $SCRIPT_NAME --help               Show this help message
 
 setup:
-  Six steps, each with a default (agent name, image, preinstall
-  environment, agent config volume, network, environment); the entry is
-  merged into config.json ("preinstall" included — see run below).
+  Five steps, each with a default (agent name, image, preinstall
+  environment, network, environment); the entry is merged into
+  config.json ("preinstall" included — see run below).
+  Persistence is per agent folder: ~/.config/islet/<name>/ mounts
+  deps/, config/ and sessions/ into the container automatically —
+  config.json needs no volume keys.
   Flags skip steps: --name <agent>, --image <img>,
   --preinstall <a,b,...>, --config-volume <dir>, --network <host|bridge>,
   --env <KEY=V[,K2=V2]>
@@ -71,16 +74,16 @@ Run:
   On the first run the "preinstall" list from config.json is baked into a
   per-agent derived image (islet-pre:<name>-<keyed hash>; rebuilt only when
   deps or the base image change).
-  Volumes persisted across runs (from config.json):
-    deps           — agent tool store: ~/.config/islet/<name>/deps mounted
-                     at /opt/islet-tools and /root/.local; installs made
-                     during a run (apk add, pip --user, npm -g, gem, go)
-                     are captured there and survive into the next run
-    volume_libs    — optional override of the apk download cache
-    volume_config  — agent config, default ~/.config/<agent-name>
-    Sessions/auth are saved to ~/.local/share/islet/<agent-name>-sessions
-    on the host (override with "volume_sessions" in config.json) and
-    mounted at /root/.local/share/<agent-name>, so they survive --rm runs.
+  Volumes persisted across runs (all under ~/.config/islet/<name>/):
+    deps/          — agent tool store mounted at /opt/islet-tools and
+                     /root/.local; installs made during a run (apk add,
+                     pip --user, npm -g, gem, go) survive into the next run
+    config/        — agent config (plugins, extensions, auth, themes)
+                     mounted at the agent's config dir in the container
+    sessions/      — saved sessions/auth data dir, mounted at the agent's
+                     data dir; survive --rm runs and Docker restarts
+    volume_libs / volume_config / volume_sessions in config.json override
+    the corresponding dirs (or use --config-volume at setup)
   -v host_path:container_path[,host2:container2,...]
               extra bind mounts for this run (e.g. ~/.ssh:/root/.ssh:ro);
               comma-separated, mounted in addition to config.json volumes
@@ -235,22 +238,23 @@ run_agent() {
 
   base_image="$(cfg_get --arg b "$name" '.agent[$b].image')"
   network="$(cfg_get --arg b "$name" '.agent[$b].network // "host"')"
-  # Per-agent deps dir next to config.json (~/.config/islet/<name>/deps):
-  # mounted into the container as the agent's tool store, so libraries and
-  # programs installed during a run (apk/pip/npm/gem/go...) are still there
-  # on the next run.
-  deps_dir="${ISLET_CONFIG_DIR}/${name}/deps"
-  # Volume for installed libs (apk download cache) — defaults into the deps
-  # dir so all dependency-related state lives in one place.
+
+  # Per-agent data folder: ~/.config/islet/<name>/ groups every persistent
+  # piece of one agent:
+  #   deps/     — agent tool store (apk rootfs, npm/go/gem/pip libs, apk cache)
+  #   config/   — agent configuration (plugins, extensions, auth, themes)
+  #   sessions/ — saved sessions/auth data dir
+  # Each entry in config.json only references its agent implicitly; the
+  # volume_* keys below stay as optional overrides.
+  local data_dir
+  data_dir="${ISLET_CONFIG_DIR}/${name}"
+  deps_dir="${data_dir}/deps"
   volume_libs="$(cfg_get --arg b "$name" '.agent[$b].volume_libs // ""')"
   volume_libs="${volume_libs:-${deps_dir}/apk-cache}"
-  # Volume for agent's own config (~/.config/<agent-name> by default).
   volume_config="$(cfg_get --arg b "$name" '.agent[$b].volume_config // ""')"
-  volume_config="${volume_config:-${HOME}/.config/${name}}"
-  # Volume for saved sessions/auth (the agent's data dir, e.g. opencode's
-  # .local/share/opencode) — persists across --rm container runs.
+  volume_config="${volume_config:-${data_dir}/config}"
   volume_sessions="$(cfg_get --arg b "$name" '.agent[$b].volume_sessions // ""')"
-  volume_sessions="${volume_sessions:-${HOME}/.local/share/islet/${name}-sessions}"
+  volume_sessions="${volume_sessions:-${data_dir}/sessions}"
   volume_libs="${volume_libs/#\~/$HOME}"
   volume_config="${volume_config/#\~/$HOME}"
   volume_sessions="${volume_sessions/#\~/$HOME}"
@@ -311,7 +315,7 @@ run_agent() {
     fixed_env+=(--env "PI_CODING_AGENT_DIR=$run_config_dir")
   elif [[ "$agent_kind" == 'opencode' ]]; then
     # npm plugins are installed into ~/.cache/opencode at startup.
-    cache_dir="${ISLET_CONFIG_DIR}/${name}/opencode-cache"
+    cache_dir="${data_dir}/opencode-cache"
   fi
 
   # Per-agent runtime image: preinstall deps from config are baked into a
@@ -412,10 +416,10 @@ ui_box() {
   printf '%s╰%s╯%s\n' "$C_CYAN" "$(hr $((w + 4)))" "$C_RESET"
 }
 
-# step_header <num> <title> — boxed header for the setup wizard steps (1-6).
+# step_header <num> <title> — boxed header for the setup wizard steps (1-5).
 step_header() {
   printf '\n'
-  ui_box "setup - step $1/6" "$2"
+  ui_box "setup - step $1/5" "$2"
 }
 
 # dep_icon <dep> — icon shown for each preinstall environment entry.
@@ -725,11 +729,13 @@ run_build() {
 #   step 1: agent name           (default: agent)
 #   step 2: image                (default: ghcr.io/anomalyco/opencode:latest)
 #   step 3: preinstall env       (multi-select, saved as .preinstall)
-#   step 4: agent config volume  (default: ~/.config/<agent-name>)
-#   step 5: network              (default: host)
-#   step 6: environment          (KEY=VALUE,KEY=VALUE; default: none)
+#   step 4: network              (default: host)
+#   step 5: environment          (KEY=VALUE,KEY=VALUE; default: none)
 # The preinstall list is baked into a per-agent derived image on the first
 # run; runtime installs are captured in ~/.config/islet/<name>/deps.
+# Persistence is automatic — every agent owns ~/.config/islet/<name>/
+# (deps/, config/ and sessions/ are mounted into the container); only the
+# optional --config-volume flag writes an explicit volume_config override.
 # Flags skip their step with the given value (--name, --image,
 # --preinstall 'a,b', --config-volume <dir>, --network host|bridge,
 # --env 'KEY=V,K2=V2'); steps without a flag are still prompted.
@@ -810,15 +816,12 @@ $opt_usage"
     multichoice preinstall 'Git' 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
   fi
 
-  step_header 4 'Agent config volume'
-  local volume_config
-  if [[ -n "$opt_config_volume" ]]; then
-    volume_config="$opt_config_volume"
-  else
-    volume_config="$(ask 'Agent config volume' "~/.config/$name")"
-  fi
+  # config/ dir is derived (step removed): ~/.config/islet/<name>/config is
+  # mounted automatically as the agent's config; --config-volume overrides.
+  local volume_config=''
+  [[ -n "$opt_config_volume" ]] && volume_config="$opt_config_volume"
 
-  step_header 5 'Network'
+  step_header 4 'Network'
   local network
   if [[ -n "$opt_network" ]]; then
     case "$opt_network" in
@@ -835,7 +838,7 @@ $opt_usage"
     esac
   fi
 
-  step_header 6 'Environment variables'
+  step_header 5 'Environment variables'
   local -a env_pairs=()
   local env_input="$opt_env"
   if [[ -n "$opt_env" ]]; then
@@ -886,11 +889,12 @@ Example: API_KEY=secret,FOO=bar"
     '{
       image: $image,
       preinstall: $preinstall,
-      volume_config: $volume_config,
       network: $network,
       ports: $ports,
       environment: $environment
-    }')"
+    }
+    | if $volume_config == "" then . else .volume_config = $volume_config end
+    ')"
 
   local merge_filter='
     .agent = ((.agent // {}) + {($key): $agent})

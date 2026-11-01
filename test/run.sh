@@ -152,7 +152,7 @@ JSON
   check 'workspace mounted'    "$(grep -q -- "--volume $home/ws:/workspace" <<<"$got" && echo 0 || echo 1)"
   check 'agent config volume'  "$(grep -q -- "--volume $home/.config/opencode:/root/.config/opencode" <<<"$got" && echo 0 || echo 1)"
   check 'apk cache override (volume_libs)' "$(grep -q -- "--volume $home/.local/share/islet/opencode-libs:/var/cache/apk" <<<"$got" && echo 0 || echo 1)"
-  check 'sessions volume'      "$(grep -q -- "--volume $home/.local/share/islet/opencode-sessions:/root/.local/share/opencode" <<<"$got" && echo 0 || echo 1)"
+  check 'sessions volume'      "$(grep -q -- "--volume $home/.config/islet/opencode/sessions:/root/.local/share/opencode" <<<"$got" && echo 0 || echo 1)"
   check 'port published'       "$(grep -q -- '--publish 8080:8080' <<<"$got" && echo 0 || echo 1)"
   check 'env var'              "$(grep -q -- '--env API_KEY=abc' <<<"$got" && echo 0 || echo 1)"
   check 'image last (derived)' "$(grep -q ' islet-pre:opencode-' <<<"$got" && echo 0 || echo 1)"
@@ -221,6 +221,7 @@ t_setup_flags() {
   make_fake_docker
 
   # All flags set -> no stdin needed; </dev/null proves it.
+  # --config-volume is now an optional override of the agent data folder.
   HOME="$home" bash "$ROOT/islet.sh" setup \
     --name flagagent \
     --image 'img:flags:1' \
@@ -239,11 +240,12 @@ t_setup_flags() {
   assert_eq 'flag env'            "$(jq_get "$cfg" '.agent.flagagent.environment.K')" 'v'
 
   # Mixed: only --name and --network set, rest still prompted
-  # (image, preinstall, config volume, env).
-  printf '%s\n' 'img:mixed' '' '' '' \
+  # (image, preinstall, env); no config-volume prompt anymore.
+  printf '%s\n' 'img:mixed' '' '' \
     | HOME="$home" bash "$ROOT/islet.sh" setup --name mixed --network bridge >/dev/null 2>&1
   assert_eq 'mixed image'         "$(jq_get "$cfg" '.agent.mixed.image')"            'img:mixed'
   assert_eq 'mixed network'       "$(jq_get "$cfg" '.agent.mixed.network')"          'bridge'
+  assert_eq 'mixed no config key' "$(jq_get "$cfg" '.agent.mixed.volume_config // "absent"')" 'absent'
 
   # Flag validation errors.
   local rc=0
@@ -280,41 +282,45 @@ t_rm_keeps_config() {
 # --- islet setup -------------------------------------------------------------
 
 t_setup() {
-  printf 'islet setup — 6-step wizard into config.json\n'
+  printf 'islet setup — 5-step wizard into config.json\n'
   local home; home="$(mktemp -d)"
   make_fake_docker
 
   # Answers: name (pi), image, preinstall toggle '2 7' (Node.js Ruby),
-  # confirm, config volume, network (2 = bridge), env.
-  printf '%s\n' 'pi' 'img:pi:2' '2 7' '' '' '2' 'FOO=2' \
+  # confirm, network (2 = bridge), env.
+  printf '%s\n' 'pi' 'img:pi:2' '2 7' '' '2' 'FOO=2' \
     | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
   local cfg="$home/.config/islet/config.json"
   check 'config created'          "$([[ -f "$cfg" ]]; echo $?)"
   assert_eq 'entry name'          "$(jq_get "$cfg" '.container')"               'pi'
   assert_eq 'image'               "$(jq_get "$cfg" '.agent.pi.image')"          'img:pi:2'
   assert_eq 'preinstall saved'    "$(jq_get "$cfg" '.agent.pi.preinstall | join(" ")')" 'Node.js Ruby'
-  assert_eq 'config volume'       "$(jq_get "$cfg" '.agent.pi.volume_config')"  '~/.config/pi'
+  assert_eq 'no volume keys'      "$(jq_get "$cfg" '.agent.pi.volume_config // "absent"')" 'absent'
   assert_eq 'network'             "$(jq_get "$cfg" '.agent.pi.network')"        'bridge'
   assert_eq 'environment'         "$(jq_get "$cfg" '.agent.pi.environment.FOO')" '2'
 
   # Sibling kept on the second setup; same name replaces its own entry.
   HOME="$home" bash "$ROOT/install.sh" --config-dir "$home/none" >/dev/null 2>&1 </dev/null || true
-  printf '%s\n' 'sib' 'sib:img' '' '' '' '' \
+  printf '%s\n' 'sib' 'sib:img' '' '' '' \
     | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
-  printf '%s\n' 'pi' 'pi:v2' '' '' '' '' \
+  printf '%s\n' 'pi' 'pi:v2' '' '' '' \
     | HOME="$home" bash "$ROOT/islet.sh" setup >/dev/null 2>&1
   assert_eq 'sibling kept'        "$(jq_get "$cfg" '.agent.sib.image')"         'sib:img'
   assert_eq 'entry replaced'      "$(jq_get "$cfg" '.agent.pi.image')"          'pi:v2'
   assert_eq 'preinstall replaced' "$(jq_get "$cfg" '.agent.pi.preinstall')"     '[]'
 
   # Run the saved entry end-to-end (fake docker): preinstall is baked into
-  # a derived image and the deps dir is mounted as the agent tool store.
+  # a derived image, the agent data folder is mounted (deps + config).
   mkdir -p "$home/ws"; rm -f /tmp/islet-fake-docker.log
   HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" pi "$home/ws" >/dev/null 2>&1
   local got; got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
   check 'runs the saved entry' \
     "$(grep -q -- '--volume '"$home"'/ws:/workspace' <<<"$got" && echo 0 || echo 1)"
   check 'derived preinstall image' "$(grep -q 'islet-pre:pi-' <<<"$got" && echo 0 || echo 1)"
+  check 'agent folder config mount' \
+    "$(grep -q -- "--volume $home/.config/islet/pi/config:/root/.config/pi" <<<"$got" && echo 0 || echo 1)"
+  check 'agent folder sessions mount' \
+    "$(grep -q -- "--volume $home/.config/islet/pi/sessions:/root/.local/share/pi" <<<"$got" && echo 0 || echo 1)"
   check 'deps hub mounted' \
     "$(grep -q -- "--volume $home/.config/islet/pi/deps:/opt/islet-tools" <<<"$got" && echo 0 || echo 1)"
   check 'deps pip mount' \
