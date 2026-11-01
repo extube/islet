@@ -43,11 +43,19 @@ Option A — from a Dockerfile (agent built into the image):
 3. **Register it in the config** with the 6-step `islet setup` wizard
    (each step has a default — agent name, image, preinstall environment,
    agent config volume, network, environment variables). Point `image` at
-   `islet/<agent>:latest`:
+   `islet/<agent>:latest`; or fill steps headless with flags that skip
+   their step:
 
    ```sh
-   islet setup
+   islet setup \
+     --name opencode \
+     --image islet/opencode:latest \
+     --preinstall 'Git,Node.js' \
+     --network host
    ```
+
+   (`--config-volume`, `--env` are the other flags; steps without a flag
+   are still prompted.)
 
 Option B — config only, no Dockerfile. Edit `config.json` by hand; every
 entry needs just an `image`, and the `preinstall` list (optional) is baked
@@ -127,6 +135,9 @@ islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
 ```sh
 islet create [file]        # create a Dockerfile (choose opencode/pi/hermes)islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
 islet setup                # 6-step wizard: add an agent entry to config.json
+islet setup --name pi --image img:pi --preinstall 'Node.js,Go' \
+  --config-volume ~/.config/pi --network bridge --env 'K=v'
+                           # flags skip their wizard step (value from flag)
 islet [name] [workspace]   # run an agent (name/order optional)
 islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)
 islet ps                   # list running islet containers

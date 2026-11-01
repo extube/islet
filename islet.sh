@@ -54,6 +54,9 @@ setup:
   Six steps, each with a default (agent name, image, preinstall
   environment, agent config volume, network, environment); the entry is
   merged into config.json ("preinstall" included — see run below).
+  Flags skip steps: --name <agent>, --image <img>,
+  --preinstall <a,b,...>, --config-volume <dir>, --network <host|bridge>,
+  --env <KEY=V[,K2=V2]>
   (see README "Adding an agent to config.json")
 
 build:
@@ -709,49 +712,132 @@ run_build() {
 #   step 6: environment          (KEY=VALUE,KEY=VALUE; default: none)
 # The preinstall list is baked into a per-agent derived image on the first
 # run; runtime installs are captured in ~/.config/islet/<name>/deps.
+# Flags skip their step with the given value (--name, --image,
+# --preinstall 'a,b', --config-volume <dir>, --network host|bridge,
+# --env 'KEY=V,K2=V2'); steps without a flag are still prompted.
 run_setup() {
   require_cmd jq
 
+  # --- flags: fill values without the TUI --------------------------------
+  local opt_name='' opt_image='' opt_preinstall='' opt_config_volume=''
+  local opt_network='' opt_env=''
+  local opt_usage='setup [flags]
+flags:
+  --name <agent>              step 1
+  --image <docker-image>      step 2
+  --preinstall <a,b,...>      step 3 (Git,Node.js,Go,Java,Python,Rust,Ruby,C/C++)
+  --config-volume <dir>       step 4 (host dir mounted as agent config)
+  --network <host|bridge>     step 5
+  --env <KEY=V[,KEY2=V2]>     step 6'
+  while (($#)); do
+    case "$1" in
+    --name | --image | --preinstall | --config-volume | --network | --env)
+      [[ -n "${2:-}" ]] || die "missing value for $1
+$opt_usage"
+      local flag="$1"
+      case "$flag" in
+      --name) opt_name="$2" ;;
+      --image) opt_image="$2" ;;
+      --preinstall) opt_preinstall="$2" ;;
+      --config-volume) opt_config_volume="$2" ;;
+      --network) opt_network="$2" ;;
+      --env) opt_env="$2" ;;
+      esac
+      shift 2
+      ;;
+    -h | --help)
+      printf '%s\n' "$opt_usage"
+      return 0
+      ;;
+    *)
+      die "unknown setup argument: $1
+$opt_usage"
+      ;;
+    esac
+  done
+
   step_header 1 'Agent name'
   local name
-  name="$(ask 'Agent name' 'agent')"
+  if [[ -n "$opt_name" ]]; then
+    name="$opt_name"
+  else
+    name="$(ask 'Agent name' 'agent')"
+  fi
 
   step_header 2 'Image'
   local image
-  image="$(ask 'Docker image' "$OPENCODE_IMAGE_DEFAULT")"
+  if [[ -n "$opt_image" ]]; then
+    image="$opt_image"
+  else
+    image="$(ask 'Docker image' "$OPENCODE_IMAGE_DEFAULT")"
+  fi
 
   step_header 3 'Preinstall environment'
   # Baked into the derived image on the next run; runtime installs by the
   # agent are captured in the per-agent deps dir regardless.
   local -a preinstall=()
-  multichoice preinstall 'Git' 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
+  if [[ -n "$opt_preinstall" ]]; then
+    local dep
+    local -a known=(Git Node.js Go Java Python Rust Ruby C/C++)
+    IFS=',' read -r -a preinstall <<<"${opt_preinstall// /}"
+    for dep in "${preinstall[@]}"; do
+      if (( ${#dep} == 0 )); then
+        continue
+      fi
+      if ! printf '%s\n' "${known[@]}" | grep -Fxq "$dep"; then
+        die "unknown preinstall dep: $dep (known: ${known[*]})"
+      fi
+    done
+  else
+    multichoice preinstall 'Git' 'Node.js' 'Go' 'Java' 'Python' 'Rust' 'Ruby' 'C/C++'
+  fi
 
   step_header 4 'Agent config volume'
   local volume_config
-  volume_config="$(ask 'Agent config volume' "~/.config/$name")"
+  if [[ -n "$opt_config_volume" ]]; then
+    volume_config="$opt_config_volume"
+  else
+    volume_config="$(ask 'Agent config volume' "~/.config/$name")"
+  fi
 
   step_header 5 'Network'
-  printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
-  printf '  %s2)%s bridge (publish ports in config.json)\n' "$C_YELLOW" "$C_RESET"
   local network
-  printf -v network '%s' "$(ask 'Select' '1')"
-  case "$network" in
-  2) network='bridge' ;;
-  *) network='host' ;;
-  esac
+  if [[ -n "$opt_network" ]]; then
+    case "$opt_network" in
+    host | bridge) network="$opt_network" ;;
+    *) die "invalid --network value: $opt_network (host|bridge)" ;;
+    esac
+  else
+    printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
+    printf '  %s2)%s bridge (publish ports in config.json)\n' "$C_YELLOW" "$C_RESET"
+    printf -v network '%s' "$(ask 'Select' '1')"
+    case "$network" in
+    2) network='bridge' ;;
+    *) network='host' ;;
+    esac
+  fi
 
   step_header 6 'Environment variables'
   local -a env_pairs=()
-  local env_input
-  while true; do
-    env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
-    [[ -z "$env_input" ]] && break
+  local env_input="$opt_env"
+  if [[ -n "$opt_env" ]]; then
     if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
       IFS=',' read -r -a env_pairs <<<"$env_input"
-      break
+    else
+      die "invalid --env value: $opt_env
+Example: API_KEY=secret,FOO=bar"
     fi
-    printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
-  done
+  else
+    while true; do
+      env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
+      [[ -z "$env_input" ]] && break
+      if [[ "$env_input" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^,]*(,[A-Za-z_][A-Za-z0-9_]*=[^,]*)*$ ]]; then
+        IFS=',' read -r -a env_pairs <<<"$env_input"
+        break
+      fi
+      printf '%sInvalid format. Example: API_KEY=secret,FOO=bar%s\n' "$C_RED" "$C_RESET" >&2
+    done
+  fi
 
   # --- save into config.json (merge; sibling agents are kept) --------------
   mkdir -p "$(dirname "$ISLET_CONFIG")"
