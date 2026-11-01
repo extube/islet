@@ -156,6 +156,8 @@ JSON
   check 'port published'       "$(grep -q -- '--publish 8080:8080' <<<"$got" && echo 0 || echo 1)"
   check 'env var'              "$(grep -q -- '--env API_KEY=abc' <<<"$got" && echo 0 || echo 1)"
   check 'image last (derived)' "$(grep -q ' islet-pre:opencode-' <<<"$got" && echo 0 || echo 1)"
+  check 'opencode plugin cache persisted' \
+    "$(grep -q -- "--volume $home/.config/islet/opencode/opencode-cache:/root/.cache/opencode" <<<"$got" && echo 0 || echo 1)"
 
   # rm command with the new schema
   HOME="$home" bash "$ROOT/islet.sh" rm opencode >/dev/null 2>&1 </dev/null
@@ -319,6 +321,8 @@ t_setup() {
     "$(grep -q -- "--volume $home/.config/islet/pi/deps:/root/.local" <<<"$got" && echo 0 || echo 1)"
   check 'apk cache inside deps' \
     "$(grep -q -- "--volume $home/.config/islet/pi/deps/apk-cache:/var/cache/apk" <<<"$got" && echo 0 || echo 1)"
+  check 'pi agent dir redirect env' \
+    "$(grep -q -- '--env PI_CODING_AGENT_DIR=/root/.config/pi' <<<"$got" && echo 0 || echo 1)"
   rm -rf "$home"
 }
 

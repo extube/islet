@@ -231,7 +231,8 @@ run_agent() {
   fi
 
   local base_image volume_libs volume_config volume_sessions network deps_dir
-  local container_name=''
+  local container_name='' cache_dir='' fixed_env=()
+
   base_image="$(cfg_get --arg b "$name" '.agent[$b].image')"
   network="$(cfg_get --arg b "$name" '.agent[$b].network // "host"')"
   # Per-agent deps dir next to config.json (~/.config/islet/<name>/deps):
@@ -281,6 +282,7 @@ run_agent() {
   [[ -d "$workspace" ]] || die "workspace directory does not exist: $workspace"
   workspace="$(cd "$workspace" && pwd)"
   mkdir -p "$deps_dir" "$volume_libs" "$volume_config" "$volume_sessions"
+  [[ -n "$cache_dir" ]] && mkdir -p "$cache_dir"
 
   # In-container paths of the agent's config and data dirs. They must match
   # what the agent itself reads — not the config entry name: an agent named
@@ -302,6 +304,15 @@ run_agent() {
   hermes) run_config_dir='/root/.config/hermes'; run_data_dir='/root/.local/share/hermes' ;;
   *) run_config_dir="/root/.config/${name}"; run_data_dir="/root/.local/share/${name}" ;;
   esac
+
+  # pi keeps extensions, skills, themes, prompts and auth in its agent dir
+  # (~/.pi/agent by default). Redirect it into the persisted config volume.
+  if [[ "$agent_kind" == 'pi' ]]; then
+    fixed_env+=(--env "PI_CODING_AGENT_DIR=$run_config_dir")
+  elif [[ "$agent_kind" == 'opencode' ]]; then
+    # npm plugins are installed into ~/.cache/opencode at startup.
+    cache_dir="${ISLET_CONFIG_DIR}/${name}/opencode-cache"
+  fi
 
   # Per-agent runtime image: preinstall deps from config are baked into a
   # derived image (<name>-<hash(base image + deps)>), which is also where the
@@ -336,6 +347,7 @@ run_agent() {
   while IFS= read -r env_pair; do
     docker_args+=(--env "$env_pair")
   done < <(cfg_get --arg b "$name" '.agent[$b].environment // {} | to_entries[] | "\(.key)=\(.value)"')
+  docker_args+=("${fixed_env[@]+${fixed_env[@]}}")
 
   docker_args+=(
     --workdir /workspace
@@ -349,6 +361,12 @@ run_agent() {
     --volume "$deps_dir:/opt/islet-tools"
     --volume "$deps_dir:/root/.local"
   )
+  if [[ -n "$cache_dir" ]]; then
+    docker_args+=(
+      # opencode npm-plugin cache: installed once, reloaded after restart.
+      --volume "$cache_dir:/root/.cache/opencode"
+    )
+  fi
   local extra
   for extra in "${extra_volumes[@]}"; do
     docker_args+=(--volume "$extra")

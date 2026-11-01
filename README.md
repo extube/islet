@@ -107,6 +107,20 @@ into a per-agent derived image automatically on the first run:
    islet <agent-name> ~/project
    ```
 
+### Where agent extensions/plugins live (and how they persist)
+
+- **opencode** — local plugins: `~/.config/opencode/plugins/` (the
+  `volume_config` dir, persisted); npm plugins declared in
+  `opencode.json` are installed into `~/.cache/opencode/node_modules/`,
+  which islet persists in `~/.config/islet/<name>/opencode-cache` and
+  reuses on the next run.
+- **pi** — extensions, skills, themes, prompts and auth live in the pi
+  agent dir (`~/.pi/agent` by default); islet sets
+  `PI_CODING_AGENT_DIR=/root/.config/pi`, so they all live inside the
+  persisted `volume_config` dir (`~/.config/pi`).
+- Anything an agent pip/npm/apk/gem/go-installs during a run lands in the
+  deps dir (`~/.config/islet/<name>/deps`) regardless.
+
 ### One-off volume mounts (`-v`)
 
 Extra bind mounts — ssh keys, cache dirs, anything — can be attached to a
