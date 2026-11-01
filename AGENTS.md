@@ -28,6 +28,9 @@ containers. It currently supports
   setup wizard now has six steps (name, image, preinstall multi-select,
   config volume, network, environment) writing `preinstall` into
   config.json — that wizard (setup) is the place where deps are picked;
+  flags (`--name`, `--image`, `--preinstall`, `--config-volume`,
+  `--network`, `--env`) skip their step with the given value (flagged
+  values are validated; steps without a flag are still prompted);
   `islet.sh create` generates a bare agent Dockerfile (fixed runtime,
   no preinstall step) and `islet.sh build` just docker-builds it.
   `islet.sh rm [name]` removes one agent piece from config.json (empty

@@ -211,6 +211,52 @@ JSON
   rm -rf "$home"
 }
 
+# --- islet setup via flags ---------------------------------------------------
+
+t_setup_flags() {
+  printf 'islet setup — flags skip wizard steps\n'
+  local home; home="$(mktemp -d)"
+  make_fake_docker
+
+  # All flags set -> no stdin needed; </dev/null proves it.
+  HOME="$home" bash "$ROOT/islet.sh" setup \
+    --name flagagent \
+    --image 'img:flags:1' \
+    --preinstall 'Node.js, C/C++' \
+    --config-volume "~/.config/flagcfg" \
+    --network bridge \
+    --env 'K=v' \
+    >/dev/null 2>&1 </dev/null
+  local cfg="$home/.config/islet/config.json"
+  check 'flag config created'     "$([[ -f "$cfg" ]]; echo $?)"
+  assert_eq 'flag name'           "$(jq_get "$cfg" '.container')"                    'flagagent'
+  assert_eq 'flag image'          "$(jq_get "$cfg" '.agent.flagagent.image')"        'img:flags:1'
+  assert_eq 'flag preinstall'     "$(jq_get "$cfg" '.agent.flagagent.preinstall | join(" ")')" 'Node.js C/C++'
+  assert_eq 'flag config volume'  "$(jq_get "$cfg" '.agent.flagagent.volume_config')" '~/.config/flagcfg'
+  assert_eq 'flag network'        "$(jq_get "$cfg" '.agent.flagagent.network')"      'bridge'
+  assert_eq 'flag env'            "$(jq_get "$cfg" '.agent.flagagent.environment.K')" 'v'
+
+  # Mixed: only --name and --network set, rest still prompted
+  # (image, preinstall, config volume, env).
+  printf '%s\n' 'img:mixed' '' '' '' \
+    | HOME="$home" bash "$ROOT/islet.sh" setup --name mixed --network bridge >/dev/null 2>&1
+  assert_eq 'mixed image'         "$(jq_get "$cfg" '.agent.mixed.image')"            'img:mixed'
+  assert_eq 'mixed network'       "$(jq_get "$cfg" '.agent.mixed.network')"          'bridge'
+
+  # Flag validation errors.
+  local rc=0
+  HOME="$home" bash "$ROOT/islet.sh" setup --network wan >/dev/null 2>&1 </dev/null || rc=$?
+  check 'invalid network rejected' "$([[ $rc -ne 0 ]]; echo $?)"
+  rc=0
+  HOME="$home" bash "$ROOT/islet.sh" setup --preinstall 'Node.js,Bogus' >/dev/null 2>&1 </dev/null || rc=$?
+  check 'unknown dep rejected'    "$([[ $rc -ne 0 ]]; echo $?)"
+  rc=0
+  HOME="$home" bash "$ROOT/islet.sh" setup --bogus x >/dev/null 2>&1 </dev/null || rc=$?
+  check 'unknown flag rejected'   "$([[ $rc -ne 0 ]]; echo $?)"
+
+  rm -rf "$home"
+}
+
 # --- islet rm keeps the config folder ----------------------------------------
 
 t_rm_keeps_config() {
@@ -287,6 +333,7 @@ t_run_schema
 t_run_volumes_flag
 t_rm_keeps_config
 t_setup
+t_setup_flags
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
