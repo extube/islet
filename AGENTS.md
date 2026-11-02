@@ -27,7 +27,10 @@ containers. It currently supports
   <new>` renames an agent: the config.json key (and `.container`, if it
   pointed at `<old>`) plus its data folder `~/.config/islet/<old>` are
   renamed; the derived deps image is keyed by the agent name so it is
-  re-baked on the next run. Dependencies are
+  re-baked on the next run. `islet.sh update` re-runs the installer
+  (source: `ISLET_INSTALL_URL`, default
+  `https://raw.githubusercontent.com/extube/islet/main/install.sh`) to
+  refresh the installed command; config.json survives. Dependencies are
   config-driven: `agent.<name>.preinstall` is baked into a derived image
   (`islet-pre:<name>-<hash(base image + deps)>`, via `run_deps_image`,
   cached so it survives rebuilds and is only rebuilt when deps or the

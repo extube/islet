@@ -15,6 +15,10 @@ ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
 # Default image used by `islet setup`.
 OPENCODE_IMAGE_DEFAULT='ghcr.io/anomalyco/opencode:latest'
 
+# Installer source for `islet update` (re-executes install.sh, which
+# refreshes the islet command and keeps config.json).
+ISLET_INSTALL_URL_DEFAULT='https://raw.githubusercontent.com/extube/islet/main/install.sh'
+
 # Colors (only when stdout is a terminal).
 if [[ -t 1 ]]; then
   C_RESET=$'\033[0m'
@@ -47,6 +51,7 @@ Usage:
   $SCRIPT_NAME setup                Add a new agent entry to config.json
   $SCRIPT_NAME [name] [workspace]   Run an agent from config
   $SCRIPT_NAME mv <old> <new>       Rename an agent (config key + data folder)
+  $SCRIPT_NAME update               Refresh the islet command (re-run installer)
   $SCRIPT_NAME ps                   List running islet containers
   $SCRIPT_NAME rm [name]            Remove an agent, or uninstall islet
   $SCRIPT_NAME --help               Show this help message
@@ -1058,6 +1063,20 @@ run_mv() {
   return 0
 }
 
+# run_update — refresh the islet command by re-running the installer.
+# install.sh preserves config.json, so all agent entries survive.
+# The installer source can be overridden with ISLET_INSTALL_URL (the
+# installer itself understands the same variable).
+run_update() {
+  local url="${ISLET_INSTALL_URL:-$ISLET_INSTALL_URL_DEFAULT}"
+  require_cmd curl
+  printf '%sUpdating islet — running the installer from %s%s%s\n' \
+    "$C_BOLD" "$C_DIM" "$url" "$C_RESET" "$C_RESET"
+  curl -fsSL "$url" | ISLET_INSTALL_URL="$url" sh
+  printf '%s✔ islet updated (config.json untouched)%s\n' \
+    "$C_GREEN" "$C_RESET"
+}
+
 main() {
   case "${1:-}" in
   -h | --help | help)
@@ -1086,6 +1105,10 @@ main() {
   mv)
     shift
     run_mv "$@"
+    ;;
+  update)
+    shift
+    run_update "$@"
     ;;
   *)
     run_agent "$@"
