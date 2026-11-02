@@ -18,7 +18,7 @@ merged_branch() {
     head="$(git rev-parse --git-dir)/MERGE_HEAD"
     [ -f "$head" ] || return 1
     git name-rev --name-only "$(cat "$head")" 2>/dev/null \
-        | sed 's|^refs/remotes/origin/||; s|^origin/||; s|~[0-9]*$||; s|\^[0-9]*$||'
+        | sed 's|^refs/remotes/origin/||; s|^remotes/origin/||; s|^origin/||; s|~[0-9]*$||; s|\^[0-9]*$||'
 }
 
 # Validates "<feat|bug>: [#number] - description".
