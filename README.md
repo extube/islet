@@ -153,8 +153,13 @@ islet setup --name pi --image img:pi --preinstall 'Node.js,Go' \
   --config-volume ~/.config/pi --network bridge --env 'K=v'
                            # flags skip their wizard step (value from flag)
 islet [name] [workspace]   # run an agent (name/order optional)
+islet opencode [ws]        # alias flow: not in config yet? builds its image,
+islet opencode-v2 [ws]     # runs setup for it, then starts it (also pi,
+islet pi [ws]              # hermes); if already configured, just runs
+islet hermes [ws]
 islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)
 islet ps                   # list running islet containers
+islet mv <old> <new>       # rename an agent (config key + data folder)
 islet rm [name]            # remove one agent entry from the config
 islet rm                   # uninstall the islet command (config.json is kept)
 islet --help
