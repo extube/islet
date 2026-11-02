@@ -6,7 +6,7 @@
 <title>islet — Run opencode, pi &amp; hermes AI Agents in Isolated Docker Containers 🏝️</title>
 
 <!-- Primary SEO -->
-<meta name="description" content="islet is a free, open-source mini CLI app that runs AI agent harnesses — opencode, pi and hermes — in isolated Docker containers. Persistent sessions, apk cache and per-agent config volumes, host or bridge networking, and a 3-command flow: create, build, setup.">
+<meta name="description" content="islet is a free, open-source mini CLI app that runs AI agent harnesses — opencode, pi and hermes — in isolated Docker containers. Quick start in two commands: islet opencode . or islet pi . — builds the image, quick setup, runs. Persistent sessions and per-agent deps.">
 <meta name="keywords" content="islet, opencode, pi coding agent, hermes agent, Nous Research hermes, AI agent, Docker, CLI, sandbox, isolated agent environment, run opencode in docker, pi coding agent docker, hermes agent docker, persistent agent sessions, alpine">
 <meta name="author" content="extube">
 <meta name="robots" content="index, follow">
@@ -18,14 +18,14 @@
 <meta property="og:site_name" content="islet">
 <meta property="og:url" content="https://extube.github.io/islet/index.html">
 <meta property="og:title" content="islet — AI agents on a private island in Docker">
-<meta property="og:description" content="Run opencode, pi and hermes side by side in isolated Docker containers. One config, persistent sessions and libs, a 3-command setup: create, build, setup.">
+<meta property="og:description" content="Run opencode, pi and hermes side by side in isolated Docker containers. Quick start in two commands: islet opencode . — first run builds the image, quick setup, starts. Persistent sessions and per-agent deps.">
 <meta property="og:image" content="https://raw.githubusercontent.com/extube/islet/main/opencode.png">
 <meta property="og:image:alt" content="islet island sticker logo">
 
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="islet — AI agents in isolated Docker containers">
-<meta name="twitter:description" content="Run opencode, pi and hermes in Docker, side by side. Persistent sessions, libs and configs. create → build → setup → islet &lt;agent&gt; ~/project.">
+<meta name="twitter:description" content="Run opencode, pi and hermes in Docker, side by side. Quick start: islet opencode . — or islet pi . — and you're on the island.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/extube/islet/main/opencode.png">
 
 <!-- Favicon (island sticker) -->
@@ -135,6 +135,7 @@
 
   <nav class="nav" aria-label="Sections">
     <a href="#install">Installation</a>
+    <a href="#quickstart">Quick start</a>
     <a href="#agents">Why islet</a>
     <a href="#security">Security</a>
     <a href="#usage">Getting started</a>
@@ -165,6 +166,13 @@
     <div class="note">The installer only asks for the config folder (default <code>~/.config/islet</code>, override with <code>ISLET_CONFIG_DIR</code>), checks <code>jq</code> and <code>docker</code>, and puts the <code>islet</code> command on your PATH.</div>
   </section>
 
+  <section id="quickstart" aria-labelledby="quickstart-h">
+    <h2 id="quickstart-h">Quick start — two commands and you're on the island</h2>
+    <pre><span class="p">islet</span> opencode .   <span class="c"># first run: builds the opencode image, quick setup, starts</span>
+<span class="p">islet</span> pi .         <span class="c"># the same one-liner flow for pi (also: hermes, opencode-v2)</span></pre>
+    <div class="note">No config editing needed: on the first run islet builds the harness image and asks for the essentials (preinstall tools, network, environment) with a short wizard — <strong>everything persists</strong>: deps, auth, sessions and plugins go into the agent's data folder, so the next <code>islet opencode .</code> just starts the agent. Already-configured agents run as-is.</div>
+  </section>
+
   <section id="agents" aria-labelledby="agents-h">
     <h2 id="agents-h">Why islet is good for running opencode, pi and hermes together</h2>
     <div class="grid">
@@ -176,7 +184,7 @@
       <div class="card">
         <span class="icon">↔️</span>
         <h3>Zero conflicts</h3>
-        <p>Agents never see each other's config, sessions or installed libraries: config at <code>~/.config/&lt;agent&gt;</code>, sessions at <code>~/.local/share/islet/&lt;agent&gt;-sessions</code>, apk libs cache at <code>~/.local/share/islet/&lt;agent&gt;-libs</code>. Update one — the others are untouched.</p>
+        <p>Agents never see each other's config, sessions or installed libraries: everything lives in the agent's own data folder at <code>~/.config/islet/&lt;agent&gt;/</code> — <code>config/</code>, <code>sessions/</code>, <code>deps/</code> (apk rootfs, npm <code>-g</code>, gems, pip) — and is mounted just for that agent. Update one — the others are untouched.</p>
       </div>
       <div class="card">
         <span class="icon">🔋</span>
@@ -240,23 +248,22 @@
   </section>
 
   <section id="usage" aria-labelledby="usage-h">
-    <h2 id="usage-h">Getting started — create, build, setup, run in Docker</h2>
-    <pre><span class="c"># 1. create a Dockerfile (choose the agent + preinstall env)</span>
-<span class="p">islet create</span> ~/my-agents/opencode.Dockerfile
-
-<span class="c"># 2. build it -&gt; image: islet/opencode:latest</span>
-<span class="p">islet build</span> ~/my-agents/opencode.Dockerfile
-
-<span class="c"># 3. register the agent in config.json (5-step wizard)</span>
-<span class="p">islet setup</span>
-
-<span class="c"># 4. run — both agents, two different projects, right away:</span>
-<span class="p">islet</span> opencode ~/project &
+    <h2 id="usage-h">Getting started — run in one command, Dockerfile when you need it</h2>
+    <pre><span class="c"># The easy way — alias flow (opencode, opencode-v2, pi, hermes):</span>
+<span class="p">islet</span> opencode ~/project    <span class="c"># first run builds + setups, then just runs</span>
 <span class="p">islet</span> pi ~/other-project &
 <span class="p">islet</span> hermes ~/third-project &
 
-<span class="c"># list running agents / remove one / uninstall</span>
+<span class="c"># Manual route — Dockerfile when you need a custom image:</span>
+<span class="p">islet</span> create ~/my-agents/opencode.Dockerfile <span class="c"># choose the agent</span>
+<span class="p">islet</span> build ~/my-agents/opencode.Dockerfile  <span class="c"># -&gt; islet/opencode:latest</span>
+<span class="p">islet</span> setup                                  <span class="c"># 5-step wizard into config.json</span>
+<span class="p">islet</span> opencode ~/project
+
+<span class="c"># list running agents / rename / self-update / uninstall</span>
 <span class="p">islet</span> ps
+<span class="p">islet</span> mv opencode agent-007
+<span class="p">islet</span> update
 <span class="p">islet</span> rm opencode
 <span class="p">islet</span> rm</pre>
   </section>
