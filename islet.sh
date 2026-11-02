@@ -617,7 +617,8 @@ dockerfile_for() {
 FROM alpine:latest
 
 RUN apk add --no-cache \\
-      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata \\
+      libstdc++
 
 # Install the opencode binary. The installer needs bash (not busybox sh) —
 # installed by the apk line above.
@@ -637,7 +638,8 @@ EOF
 FROM alpine:latest
 
 RUN apk add --no-cache \\
-      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata
+      bash curl wget jq tar unzip git ripgrep ca-certificates tzdata \\
+      libstdc++
 
 # Install the opencode v2 binary. The installer needs bash (not busybox sh)
 # — installed by the apk line above.
