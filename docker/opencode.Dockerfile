@@ -23,6 +23,7 @@ LABEL org.opencontainers.image.title="islet-opencode" \
 #   git       - agent repository interaction
 #   ca-certificates, tzdata - TLS trust and timezone data
 #   jq, tar, unzip, ripgrep, fd - tools the agent commonly relies on
+#   libstdc++ - opencode is a C++ binary and needs it at runtime
 RUN apk add --no-cache \
       bash \
       curl \
@@ -34,7 +35,8 @@ RUN apk add --no-cache \
       tar \
       unzip \
       ripgrep \
-      fd
+      fd \
+      libstdc++
 
 # Install the opencode binary.
 #   SHELL must be set: the installer expands ${SHELL:?} (unset in the image).

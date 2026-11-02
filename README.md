@@ -2,6 +2,24 @@
 
 A mini CLI app for running AI agents in Docker containers.
 
+## Quick start
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/extube/islet/main/install.sh | sh
+```
+
+That's it — then run an agent in your project dir:
+
+```sh
+islet opencode .    # first run: builds the opencode image, quick setup, starts
+islet pi .          # same flow for pi (also: hermes, opencode-v2)
+```
+
+No config editing needed: on the first run islet builds the harness image
+and asks for the essentials (preinstall tools, network, env) with a short
+wizard; everything (deps, auth, sessions, plugins) persists in the agent's
+data folder, so the next `islet opencode .` just starts the agent.
+
 ## Installation
 
 Run the installer:
@@ -21,6 +39,12 @@ The installer only asks for the islet config folder (default
 flag), checks the requirements (`jq`, `docker`), creates a fresh
 `config.json` if there is none, and installs the `islet` command into
 `~/.local/bin/islet`.
+
+To refresh the installed `islet` command later:
+
+```sh
+islet update
+```
 
 ## Adding an agent to config.json
 
@@ -153,8 +177,14 @@ islet setup --name pi --image img:pi --preinstall 'Node.js,Go' \
   --config-volume ~/.config/pi --network bridge --env 'K=v'
                            # flags skip their wizard step (value from flag)
 islet [name] [workspace]   # run an agent (name/order optional)
+islet opencode [ws]        # alias flow: not in config yet? builds its image,
+islet opencode-v2 [ws]     # runs setup for it, then starts it (also pi,
+islet pi [ws]              # hermes); if already configured, just runs
+islet hermes [ws]
 islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)
 islet ps                   # list running islet containers
+islet mv <old> <new>       # rename an agent (config key + data folder)
+islet update               # refresh the islet command (re-runs install.sh)
 islet rm [name]            # remove one agent entry from the config
 islet rm                   # uninstall the islet command (config.json is kept)
 islet --help

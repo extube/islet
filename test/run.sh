@@ -40,6 +40,25 @@ EOF
 
 # --- syntax -----------------------------------------------------------------
 
+# --- islet update -------------------------------------------------------------
+
+t_update() {
+  printf 'islet update — re-runs the installer, keeps the config\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet"
+  printf '{"$schema":"islet.sh","container":"myagent","agent":{"myagent":{"image":"img:x"}}}' \
+    > "$home/.config/islet/config.json"
+
+  # Prompts: docker-missing (y), islet config folder (default).
+  printf 'y\n\n' | env ISLET_INSTALL_URL="file://$ROOT/install.sh" \
+    HOME="$home" PATH="$FAKEBIN:$PATH" \
+    bash "$ROOT/islet.sh" update >/dev/null 2>&1
+  check 'islet command present' "$([[ -x "$home/.local/bin/islet" ]]; echo $?)"
+  assert_eq 'config kept through update' \
+    "$(jq_get "$home/.config/islet/config.json" '.agent.myagent.image')" 'img:x'
+  rm -rf "$home"
+}
+
 t_syntax() {
   printf 'syntax\n'
   for script in install.sh islet.sh islet.dev.sh test/run.sh; do
@@ -93,6 +112,10 @@ t_create() {
     "$(grep -m1 '^FROM alpine' "$tmp/opencode2.Dockerfile")" 'FROM alpine:latest'
   check 'opencode2 install url' \
     "$(grep -q 'opencode.ai/v2/install' "$tmp/opencode2.Dockerfile" && echo 0 || echo 1)"
+  check 'opencode needs libstdc++ (v1)' \
+    "$(grep -q 'libstdc++' "$tmp/opencode.Dockerfile" && echo 0 || echo 1)"
+  check 'opencode needs libstdc++ (v2)' \
+    "$(grep -q 'libstdc++' "$tmp/opencode2.Dockerfile" && echo 0 || echo 1)"
   # pi Dockerfile to the given file path.
   printf '3\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
   assert_eq 'pi base'   "$(grep -m1 '^FROM node:24-alpine' /tmp/pi-test.Dockerfile)" 'FROM node:24-alpine'
@@ -338,6 +361,118 @@ t_setup() {
   rm -rf "$home"
 }
 
+# --- run <alias>: on-the-spot agent creation (build image + setup) ------------
+
+t_run_alias() {
+  printf 'islet <agent> — create-and-run flow when not configured yet\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet" "$home/ws"
+  cat > "$home/.config/islet/config.json" <<'JSON'
+{ "$schema": "islet.sh", "agent": {} }
+JSON
+  make_fake_docker
+  rm -f /tmp/islet-fake-docker.log
+
+  # Setup prompts come after the image build: preinstall (confirm none),
+  # network (1 = host), env (empty = skip).
+  printf '%s\n' '' '1' '' \
+    | HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" >/dev/null 2>&1
+  local cfg="$home/.config/islet/config.json"
+  assert_eq 'alias entry saved' \
+    "$(jq_get "$cfg" '.agent.opencode.image')" 'islet/opencode:latest'
+  local got; got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
+  check 'harness image built' \
+    "$(grep -q -- 'docker build -t islet/opencode:latest' <<<"$got" && echo 0 || echo 1)"
+  check 'runs after setup' \
+    "$(grep -q -- '--volume '"$home"'/ws:/workspace' <<<"$got" && echo 0 || echo 1)"
+
+  # Second invocation: entry exists -> plain run, no rebuild, no setup.
+  rm -f /tmp/islet-fake-docker.log
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" </dev/null >/dev/null 2>&1
+  got="$(cat /tmp/islet-fake-docker.log 2>/dev/null)"
+  check 'configured alias: no rebuild' \
+    "$(grep -q 'docker build' <<<"$got" && echo 1 || echo 0)"
+  check 'configured alias: runs' \
+    "$(grep -q -- '--volume '"$home"'/ws:/workspace' <<<"$got" && echo 0 || echo 1)"
+
+  # opencode-v2 alias normalizes to the canonical opencode2 name.
+  printf '%s\n' '' '1' '' \
+    | HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode-v2 "$home/ws" >/dev/null 2>&1
+  assert_eq 'opencode-v2 alias' \
+    "$(jq_get "$cfg" '.agent.opencode2.image')" 'islet/opencode2:latest'
+
+  rm -rf "$home"
+
+  # A moved agent keeps its previous image: after `islet mv opencode
+  # agent-007` the tag islet/opencode:latest is claimed, so a new
+  # `islet opencode` builds under a fresh unique tag.
+  home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet" "$home/ws"
+  cat > "$home/.config/islet/config.json" <<'JSON'
+{
+  "$schema": "islet.sh",
+  "container": "agent-007",
+  "agent": { "agent-007": { "image": "islet/opencode:latest" } }
+}
+JSON
+  rm -f /tmp/islet-fake-docker.log
+  printf '%s\n' '' '1' '' \
+    | HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" >/dev/null 2>&1
+  local new_image
+  new_image="$(jq_get "$home/.config/islet/config.json" '.agent.opencode.image')"
+  check 'moved: fresh unique tag' \
+    "$([[ "$new_image" =~ ^islet/opencode:[0-9]{8}-[0-9]{6}$ ]] && [[ "$new_image" != 'islet/opencode:latest' ]]; echo $?)"
+  assert_eq 'moved: agent-007 keeps image' \
+    "$(jq_get "$home/.config/islet/config.json" '.agent."agent-007".image')" 'islet/opencode:latest'
+  rm -rf "$home"
+
+  # Unknown (non-alias) names still fail.
+  home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet"
+  printf '{ "$schema": "islet.sh", "agent": {} }\n' >"$home/.config/islet/config.json"
+  local rc=0
+  HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" nosuchagent >/dev/null 2>&1 </dev/null || rc=$?
+  check 'unknown name rejected' "$([[ $rc -ne 0 ]]; echo $?)"
+  rm -rf "$home"
+}
+
+# --- mv: rename an agent ------------------------------------------------------
+
+t_mv() {
+  printf 'islet mv — rename agent (config key + data folder)\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet/a/deps" "$home/ws"
+  printf 'artifact' >"$home/.config/islet/a/deps/marker"
+  cat > "$home/.config/islet/config.json" <<'JSON'
+{
+  "$schema": "islet.sh",
+  "container": "a",
+  "agent": {
+    "a": { "image": "img-a", "preinstall": ["Node.js"] },
+    "sib": { "image": "img-sib" }
+  }
+}
+JSON
+
+  HOME="$home" bash "$ROOT/islet.sh" mv a b >/dev/null 2>&1 </dev/null
+  local cfg="$home/.config/islet/config.json"
+  assert_eq 'key renamed'        "$(jq_get "$cfg" '.agent.b.image')"             'img-a'
+  assert_eq 'old key gone'       "$(jq_get "$cfg" '.agent.a // "gone"'           )" 'gone'
+  assert_eq 'sibling kept'       "$(jq_get "$cfg" '.agent.sib.image')"           'img-sib'
+  assert_eq 'default container'  "$(jq_get "$cfg" '.container')"                 'b'
+  check 'data folder renamed' \
+    "$([[ -f "$home/.config/islet/b/deps/marker" ]] && [[ ! -e "$home/.config/islet/a" ]]; echo $?)"
+
+  # mv onto an existing name fails; renaming unknown fails.
+  local rc=0
+  HOME="$home" bash "$ROOT/islet.sh" mv b sib >/dev/null 2>&1 </dev/null || rc=$?
+  check 'mv conflict rejected'   "$([[ $rc -ne 0 ]]; echo $?)"
+  rc=0
+  HOME="$home" bash "$ROOT/islet.sh" mv missing zzz >/dev/null 2>&1 </dev/null || rc=$?
+  check 'mv unknown rejected'    "$([[ $rc -ne 0 ]]; echo $?)"
+  rm -rf "$home"
+}
+
 
 t_syntax
 t_install
@@ -350,6 +485,9 @@ t_run_volumes_flag
 t_rm_keeps_config
 t_setup
 t_setup_flags
+t_run_alias
+t_mv
+t_update
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))

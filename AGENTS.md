@@ -14,7 +14,23 @@ containers. It currently supports
 - `islet.sh` — stable script. Config-driven runner: `islet.sh [name]
   [workspace]` runs the selected agent (sessions and auth persist on the
   host), `-v host:container[,...]` adds one-off extra volume mounts, and
-  `islet.sh ps` lists running islet containers. Dependencies are
+  `islet.sh ps` lists running islet containers. `islet <alias> [ws]`
+  (aliases: `opencode`, `opencode-v2`/`opencode2`, `pi`, `hermes`) is the
+  create-and-run flow: when the alias is not in config.json yet, its
+  harness image is built from the factory Dockerfile (generated into a
+  temp dir, deleted afterwards, tagged `islet/<agent>:latest` — if
+  another agent entry already claims that tag (e.g. after `islet mv`,
+  so the moved agent keeps its previous image), the fresh build gets a
+  unique timestamp tag `islet/<agent>:<YYYYmmdd-HHMMSS>` instead) and
+  `islet setup --name <alias> --image ...` runs for it before the first
+  start; an already-configured alias just runs. `islet.sh mv <old>
+  <new>` renames an agent: the config.json key (and `.container`, if it
+  pointed at `<old>`) plus its data folder `~/.config/islet/<old>` are
+  renamed; the derived deps image is keyed by the agent name so it is
+  re-baked on the next run. `islet.sh update` re-runs the installer
+  (source: `ISLET_INSTALL_URL`, default
+  `https://raw.githubusercontent.com/extube/islet/main/install.sh`) to
+  refresh the installed command; config.json survives. Dependencies are
   config-driven: `agent.<name>.preinstall` is baked into a derived image
   (`islet-pre:<name>-<hash(base image + deps)>`, via `run_deps_image`,
   cached so it survives rebuilds and is only rebuilt when deps or the
