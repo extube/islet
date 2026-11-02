@@ -13,11 +13,16 @@ feature_branch_name() {
 }
 
 # Prints the name of the branch referenced by MERGE_HEAD (empty if absent).
+# Only heads/origin refs may name the commit — a tag on the same commit
+# would otherwise win and report e.g. "tags/v0.1.0^0".
 merged_branch() {
     local head
     head="$(git rev-parse --git-dir)/MERGE_HEAD"
     [ -f "$head" ] || return 1
-    git name-rev --name-only "$(cat "$head")" 2>/dev/null \
+    git name-rev --name-only \
+        --refs="refs/heads/*" --refs="refs/remotes/origin/*" \
+        --exclude="refs/remotes/origin/HEAD" \
+        "$(cat "$head")" 2>/dev/null \
         | sed 's|^refs/remotes/origin/||; s|^remotes/origin/||; s|^origin/||; s|~[0-9]*$||; s|\^[0-9]*$||'
 }
 
