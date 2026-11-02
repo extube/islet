@@ -382,7 +382,35 @@ JSON
   assert_eq 'opencode-v2 alias' \
     "$(jq_get "$cfg" '.agent.opencode2.image')" 'islet/opencode2:latest'
 
+  rm -rf "$home"
+
+  # A moved agent keeps its previous image: after `islet mv opencode
+  # agent-007` the tag islet/opencode:latest is claimed, so a new
+  # `islet opencode` builds under a fresh unique tag.
+  home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet" "$home/ws"
+  cat > "$home/.config/islet/config.json" <<'JSON'
+{
+  "$schema": "islet.sh",
+  "container": "agent-007",
+  "agent": { "agent-007": { "image": "islet/opencode:latest" } }
+}
+JSON
+  rm -f /tmp/islet-fake-docker.log
+  printf '%s\n' '' '1' '' \
+    | HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" opencode "$home/ws" >/dev/null 2>&1
+  local new_image
+  new_image="$(jq_get "$home/.config/islet/config.json" '.agent.opencode.image')"
+  check 'moved: fresh unique tag' \
+    "$([[ "$new_image" =~ ^islet/opencode:[0-9]{8}-[0-9]{6}$ ]] && [[ "$new_image" != 'islet/opencode:latest' ]]; echo $?)"
+  assert_eq 'moved: agent-007 keeps image' \
+    "$(jq_get "$home/.config/islet/config.json" '.agent."agent-007".image')" 'islet/opencode:latest'
+  rm -rf "$home"
+
   # Unknown (non-alias) names still fail.
+  home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet"
+  printf '{ "$schema": "islet.sh", "agent": {} }\n' >"$home/.config/islet/config.json"
   local rc=0
   HOME="$home" PATH="$FAKEBIN:$PATH" bash "$ROOT/islet.sh" nosuchagent >/dev/null 2>&1 </dev/null || rc=$?
   check 'unknown name rejected' "$([[ $rc -ne 0 ]]; echo $?)"

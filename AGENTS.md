@@ -18,7 +18,10 @@ containers. It currently supports
   (aliases: `opencode`, `opencode-v2`/`opencode2`, `pi`, `hermes`) is the
   create-and-run flow: when the alias is not in config.json yet, its
   harness image is built from the factory Dockerfile (generated into a
-  temp dir, deleted afterwards, tagged `islet/<agent>:latest`) and
+  temp dir, deleted afterwards, tagged `islet/<agent>:latest` — if
+  another agent entry already claims that tag (e.g. after `islet mv`,
+  so the moved agent keeps its previous image), the fresh build gets a
+  unique timestamp tag `islet/<agent>:<YYYYmmdd-HHMMSS>` instead) and
   `islet setup --name <alias> --image ...` runs for it before the first
   start; an already-configured alias just runs. `islet.sh mv <old>
   <new>` renames an agent: the config.json key (and `.container`, if it
