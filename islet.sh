@@ -209,10 +209,25 @@ agent_alias_kind() {
 
 # build_agent_image <kind> — build the <kind> harness image from its
 # factory Dockerfile (dockerfile_for) and tag it islet/<kind>:latest. The
-# Dockerfile is generated into a temp dir and deleted right after.
+# Dockerfile is generated into a temp dir and deleted right after. When the
+# tag already belongs to another agent entry (e.g. this agent was renamed
+# with `islet mv`), a fresh unique tag is used, so the renamed agent keeps
+# its previous image version untouched.
 build_agent_image() {
   local kind="$1"
   local tag="islet/${kind}:latest"
+
+  local claimed=0
+  claimed="$(cfg_get --arg img "$tag" \
+    '[.agent // {} | to_entries[] | select(.value.image == $img)] | length' 2>/dev/null || echo 0)"
+  if ((claimed > 0)); then
+    local fallback
+    fallback="islet/${kind}:$(date +%Y%m%d-%H%M%S)"
+    printf '%s%s is taken (moved to another agent) — building %s%s%s%s\n' \
+      "$C_DIM" "$tag" "$C_BOLD" "$fallback" "$C_RESET" "$C_RESET" >&2
+    tag="$fallback"
+  fi
+
   local tmpdir
   tmpdir="$(mktemp -d)"
   dockerfile_for "$kind" >"${tmpdir}/Dockerfile"
