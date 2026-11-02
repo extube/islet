@@ -46,9 +46,17 @@ Usage:
   $SCRIPT_NAME build [file]         Build an agent image from a Dockerfile
   $SCRIPT_NAME setup                Add a new agent entry to config.json
   $SCRIPT_NAME [name] [workspace]   Run an agent from config
+  $SCRIPT_NAME mv <old> <new>       Rename an agent (config key + data folder)
   $SCRIPT_NAME ps                   List running islet containers
   $SCRIPT_NAME rm [name]            Remove an agent, or uninstall islet
   $SCRIPT_NAME --help               Show this help message
+
+first run (no setup yet):
+  $SCRIPT_NAME opencode [workspace]   (also: opencode-v2, pi, hermes)
+    if <agent> is not in config.json yet, its harness image is built on
+    the fly from the factory Dockerfile (then the Dockerfile is deleted)
+    and `islet setup` runs for it — then the agent starts. If <agent> is
+    already configured, it just runs.
 
 setup:
   Five steps, each with a default (agent name, image, preinstall
@@ -184,6 +192,37 @@ run_rm() {
   return 0
 }
 
+# agent_alias_kind [name-or-alias] — canonical kind for the "docker-new"
+# run flow (see run_agent): an unknown agent name that matches a supported
+# platform alias (opencode / opencode-v2 / opencode2 / pi / hermes) gets its
+# image built on the fly and an interactive setup, then runs. Prints the
+# canoncal name, or an empty string when the name is not an alias.
+agent_alias_kind() {
+  case "$1" in
+  opencode) printf 'opencode' ;;
+  opencode2 | opencode-v2) printf 'opencode2' ;;
+  pi) printf 'pi' ;;
+  hermes) printf 'hermes' ;;
+  *) printf '' ;;
+  esac
+}
+
+# build_agent_image <kind> — build the <kind> harness image from its
+# factory Dockerfile (dockerfile_for) and tag it islet/<kind>:latest. The
+# Dockerfile is generated into a temp dir and deleted right after.
+build_agent_image() {
+  local kind="$1"
+  local tag="islet/${kind}:latest"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  dockerfile_for "$kind" >"${tmpdir}/Dockerfile"
+  printf '%sBuilding %s%s (first run, ~a minute)%s\n' \
+    "$C_BOLD" "$tag" "$C_RESET" "$C_RESET" >&2
+  docker build -t "$tag" -f "${tmpdir}/Dockerfile" "$tmpdir" >/dev/null
+  rm -rf "$tmpdir"
+  printf '%s' "$tag"
+}
+
 run_agent() {
   local name='' workspace='' volumes_arg=''
 
@@ -222,15 +261,35 @@ run_agent() {
     die "invalid config format: $ISLET_CONFIG — run 'install.sh' to recreate it"
 
   # Resolve agent name: argument, or the default container from config.
+  local default_container
+  default_container="$(cfg_get '.container // empty')"
   if [[ -z "$name" ]]; then
-    name="$(cfg_get '.container // empty')"
-    [[ -n "$name" ]] || die "no default container set in $ISLET_CONFIG"
+    name="$default_container"
+    [[ -n "$name" ]] || die "no default container set in $ISLET_CONFIG — try 'islet <agent>, e.g. islet opencode'"
   fi
 
   if ! jq -e --arg b "$name" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
-    local available
-    available="$(cfg_get '.agent | keys | join(", ")')"
-    die "unknown agent: $name (available: $available)"
+    # Not configured (yet). If the name is a supported platform alias
+    # (opencode / opencode-v2 / opencode2 / pi / hermes) the agent is
+    # created right here, on the spot: build its harness image, run
+    # `islet setup` for it, and continue the run with the new entry.
+    # "opencode-v2" normalizes to the canonical name "opencode2".
+    local kind
+    kind="$(agent_alias_kind "$name")"
+    if [[ -z "$kind" ]]; then
+      local available
+      available="$(cfg_get '.agent // {} | keys | join(", ")')"
+      die "unknown agent: $name (available: ${available:-none})"
+    fi
+    if [[ "$kind" != "$name" ]] &&
+      jq -e --arg b "$kind" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
+      name="$kind" # alias already configured under its canonical name
+    else
+      name="$kind"
+      local image
+      image="$(build_agent_image "$kind")"
+      run_setup --name "$name" --image "$image"
+    fi
   fi
 
   local base_image volume_libs volume_config volume_sessions network deps_dir
@@ -939,6 +998,49 @@ Example: API_KEY=secret,FOO=bar"
   return 0
 }
 
+# run_mv <old> <new> — rename an agent: the config.json key (and the
+# default container, if it pointed at <old>) plus its data folder
+# ~/.config/islet/<old> -> <new>. Everything else (image, deps and env
+# settings) is preserved. The derived deps image is keyed by the agent
+# name, so it is re-baked on the next run under the new name.
+run_mv() {
+  local old="${1:-}" new="${2:-}"
+  [[ -n "$old" && -n "$new" ]] ||
+    die "usage: $SCRIPT_NAME mv <old-name> <new-name>"
+  [[ "$old" != "$new" ]] || die "old and new names are identical: $old"
+  [[ "$new" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]] ||
+    die "invalid agent name: $new (letters, digits, . _ - only)"
+
+  require_cmd jq
+  [[ -f "$ISLET_CONFIG" ]] ||
+    die "config not found: $ISLET_CONFIG — run 'install.sh' first"
+
+  if ! jq -e --arg b "$old" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
+    local available
+    available="$(cfg_get '.agent // {} | keys | join(", ")')"
+    die "unknown agent: $old (available: $available)"
+  fi
+  if jq -e --arg b "$new" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
+    die "agent already exists: $new"
+  fi
+
+  local tmp="${ISLET_CONFIG}.tmp"
+  jq --arg old "$old" --arg new "$new" '
+    .agent |= (to_entries | map(if .key == $old then .key = $new else . end) | from_entries)
+    | if .container == $old then .container = $new else . end
+  ' "$ISLET_CONFIG" >"$tmp" || die "invalid config format: $ISLET_CONFIG"
+  mv "$tmp" "$ISLET_CONFIG"
+
+  local data_dir="${ISLET_CONFIG_DIR}/${old}"
+  if [[ -d "$data_dir" ]]; then
+    mv "$data_dir" "${ISLET_CONFIG_DIR}/${new}"
+  fi
+
+  printf '%s✔ Agent %s%s%s renamed to %s%s%s (config key + data folder)\n' \
+    "$C_GREEN" "$C_BOLD" "$old" "$C_RESET" "$C_BOLD" "$new" "$C_RESET"
+  return 0
+}
+
 main() {
   case "${1:-}" in
   -h | --help | help)
@@ -963,6 +1065,10 @@ main() {
   rm)
     shift
     run_rm "$@"
+    ;;
+  mv)
+    shift
+    run_mv "$@"
     ;;
   *)
     run_agent "$@"
