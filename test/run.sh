@@ -40,6 +40,25 @@ EOF
 
 # --- syntax -----------------------------------------------------------------
 
+# --- islet update -------------------------------------------------------------
+
+t_update() {
+  printf 'islet update — re-runs the installer, keeps the config\n'
+  local home; home="$(mktemp -d)"
+  mkdir -p "$home/.config/islet"
+  printf '{"$schema":"islet.sh","container":"myagent","agent":{"myagent":{"image":"img:x"}}}' \
+    > "$home/.config/islet/config.json"
+
+  # Prompts: docker-missing (y), islet config folder (default).
+  printf 'y\n\n' | env ISLET_INSTALL_URL="file://$ROOT/install.sh" \
+    HOME="$home" PATH="$FAKEBIN:$PATH" \
+    bash "$ROOT/islet.sh" update >/dev/null 2>&1
+  check 'islet command present' "$([[ -x "$home/.local/bin/islet" ]]; echo $?)"
+  assert_eq 'config kept through update' \
+    "$(jq_get "$home/.config/islet/config.json" '.agent.myagent.image')" 'img:x'
+  rm -rf "$home"
+}
+
 t_syntax() {
   printf 'syntax\n'
   for script in install.sh islet.sh islet.dev.sh test/run.sh; do
@@ -468,6 +487,7 @@ t_setup
 t_setup_flags
 t_run_alias
 t_mv
+t_update
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
