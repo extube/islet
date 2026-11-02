@@ -93,6 +93,10 @@ t_create() {
     "$(grep -m1 '^FROM alpine' "$tmp/opencode2.Dockerfile")" 'FROM alpine:latest'
   check 'opencode2 install url' \
     "$(grep -q 'opencode.ai/v2/install' "$tmp/opencode2.Dockerfile" && echo 0 || echo 1)"
+  check 'opencode needs libstdc++ (v1)' \
+    "$(grep -q 'libstdc++' "$tmp/opencode.Dockerfile" && echo 0 || echo 1)"
+  check 'opencode needs libstdc++ (v2)' \
+    "$(grep -q 'libstdc++' "$tmp/opencode2.Dockerfile" && echo 0 || echo 1)"
   # pi Dockerfile to the given file path.
   printf '3\n' | HOME="$tmp" bash "$ROOT/islet.sh" create /tmp/pi-test.Dockerfile >/dev/null 2>&1
   assert_eq 'pi base'   "$(grep -m1 '^FROM node:24-alpine' /tmp/pi-test.Dockerfile)" 'FROM node:24-alpine'
