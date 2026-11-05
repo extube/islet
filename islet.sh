@@ -202,11 +202,6 @@ run_agent() {
   workspace="${workspace:-$PWD}"
 
   require_cmd jq
-  [[ -f "$ISLET_CONFIG" ]] ||
-    die "config not found: $ISLET_CONFIG — run 'install.sh' first"
-
-  jq -e '."$schema" and .agent' "$ISLET_CONFIG" >/dev/null ||
-    die "invalid config format: $ISLET_CONFIG — run 'install.sh' to recreate it"
 
   # Resolve agent name: argument, or the default container from config.
   if [[ -z "$name" ]]; then
