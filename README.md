@@ -48,39 +48,36 @@ islet update
 
 ## Adding an agent to config.json
 
-Option A — from a Dockerfile (agent built into the image):
+Option A — run it straight from the CLI. Any name not in the config yet
+starts a creation flow:
 
-1. **Create a Dockerfile** (`islet create` — single step: choose the agent
-   opencode, opencode v2, pi or hermes; preinstall deps are NOT picked
-   here — that happens in `islet setup`):
+  - known aliases (`opencode`, `opencode-v2`/`opencode2`, `pi`, `hermes`)
+    go straight to the build + wizard flow;
+  - any other unknown name asks first —
+    *"Agent <name> not found. Create new? (y/N)"* — then asks for the
+    base agent (opencode / opencode v2 / pi / hermes) and performs the
+    same flow under
+    the typed name.
 
-   ```sh
-   islet create ~/my-agents/opencode.Dockerfile
-   ```
+```sh
+islet opencode ~/project          # alias: builds the image, runs the wizard
+islet mything ~/project           # unknown: offers to create it as opencode/pi/hermes
+```
 
-2. **Build the image** (tagged `islet/<agent>:latest`):
+The wizard steps (each with a default) are: agent name, image (the just
+built harness image), preinstall environment, network, environment
+variables; agent data dirs are created automatically under
+`~/.config/islet/<name>`.
 
-   ```sh
-   islet build ~/my-agents/opencode.Dockerfile
-   ```
-
-3. **Register it in the config** with the 5-step `islet setup` wizard
-   (each step has a default — agent name, image, preinstall environment,
-   network, environment variables; agent data dirs are created
-   automatically under `~/.config/islet/<name>`). Point `image` at
-   `islet/<agent>:latest`; or fill steps headless with flags that skip
-   their step:
-
-   ```sh
-   islet setup \
-     --name opencode \
-     --image islet/opencode:latest \
-     --preinstall 'Git,Node.js' \
-     --network host
-   ```
-
-   (`--config-volume`, `--env` are the other flags; steps without a flag
-   are still prompted.)
+`--config-dir <dir>` (works for all the create flows: `islet opencode
+--config-dir <tpl-dir> <workspace>`, `islet mything --config-dir ...`)
+points at a template agent config dir: it is validated — for opencode it
+must hold a parseable `opencode.json`/`opencode.jsonc` (comments allowed
+in `.jsonc`) — and copied into the fresh agent config dir
+`~/.config/islet/<name>/config` at creation. The image itself can also be
+built manually — a plain `docker build -t islet/<agent>:latest .` of a
+Dockerfile (e.g. generated from the repo's `docker/` folder) — and pointed
+at from an agent entry in config.json.
 
 Option B — config only, no Dockerfile. Edit `config.json` by hand; every
 entry needs just an `image`, and the `preinstall` list (optional) is baked
@@ -102,8 +99,8 @@ into a per-agent derived image automatically on the first run:
 }
 ```
 
-   - `image` — the image built with `islet build` (or any other image)
-   - `preinstall` — dependency list picked in `islet setup`
+   - `image` — the harness image (built automatically on creation, or any other image)
+   - `preinstall` — dependency list picked in the creation wizard
      (Git, Node.js, Go, Java, Python, Rust, Ruby, C/C++); baked into a
      derived image `islet-pre:<name>-<keyed hash>` on the first run and
      rebuilt only when the list or the base image changes
@@ -118,9 +115,9 @@ into a per-agent derived image automatically on the first run:
      | `sessions/` | agent data dir — `/root/.local/share/opencode` etc. | sessions, saved state |
      | `opencode-cache/` (opencode only) | `/root/.cache/opencode` | npm plugin cache |
 
-   - `volume_config` — optional override of the `config/` dir above
-     (also `--config-volume` at `islet setup`); `volume_libs` / 
-     `volume_sessions` similarly override the apk cache / sessions dirs
+   - `volume_config` — optional override of the `config/` dir above;
+     `volume_libs` / `volume_sessions` similarly override the apk cache /
+     sessions dirs
    - `network` — `host` or `bridge`
    - `ports` — `<port>:<port>` list for `network: bridge`
    - `environment` — `KEY: value` map passed to the container
@@ -170,18 +167,16 @@ islet opencode ~/project -v '~/data:dest!:with:colon,~/cache:/cache:rw'
 ## Usage
 
 ```sh
-islet create [file]        # Dockerfile (opencode / opencode v2 / pi / hermes)
-islet build [file]         # docker build the Dockerfile into islet/<agent>:latest
-islet setup                # 5-step wizard: add an agent entry to config.json
-islet setup --name pi --image img:pi --preinstall 'Node.js,Go' \
-  --config-volume ~/.config/pi --network bridge --env 'K=v'
-                           # flags skip their wizard step (value from flag)
 islet [name] [workspace]   # run an agent (name/order optional)
 islet opencode [ws]        # alias flow: not in config yet? builds its image,
-islet opencode-v2 [ws]     # runs setup for it, then starts it (also pi,
-islet pi [ws]              # hermes); if already configured, just runs
-islet hermes [ws]
+islet opencode-v2 [ws]     # runs the wizard for it, then starts it (also
+islet pi [ws]              # opencode-v2 -> opencode2, hermes); if already
+islet hermes [ws]          # configured, just runs
+islet myagent [ws]         # unknown name: "Create new? (y/N)" -> choose a
+                           # base agent (opencode/opencode-v2/pi/hermes) -> same flow
 islet [name] [ws] -v h:c   # run with extra volumes (host:container pairs)
+islet [name] [ws] --config-dir <tpl-dir>
+                           # template agent config dir, used at creation
 islet ps                   # list running islet containers
 islet mv <old> <new>       # rename an agent (config key + data folder)
 islet update               # refresh the islet command (re-runs install.sh)
