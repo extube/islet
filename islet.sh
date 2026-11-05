@@ -12,7 +12,7 @@ SCRIPT_NAME="$(basename "$0")"
 ISLET_CONFIG_DIR="${ISLET_CONFIG_DIR:-${HOME}/.config/islet}"
 ISLET_CONFIG="${ISLET_CONFIG_DIR}/config.json"
 
-# Default image used by `islet setup`.
+# Default image offered when the setup wizard prompts for one.
 OPENCODE_IMAGE_DEFAULT='ghcr.io/anomalyco/opencode:latest'
 
 # Installer source for `islet update` (re-executes install.sh, which
@@ -46,44 +46,37 @@ print_help() {
 islet (dev) — run AI agents in isolated Docker containers
 
 Usage:
-  $SCRIPT_NAME create [file]        Create a Dockerfile (opencode/pi/hermes)
-  $SCRIPT_NAME build [file]         Build an agent image from a Dockerfile
-  $SCRIPT_NAME setup                Add a new agent entry to config.json
-  $SCRIPT_NAME [name] [workspace]   Run an agent from config
+  $SCRIPT_NAME [name] [workspace]   Run an agent (created on demand)
+  $SCRIPT_NAME ps                   List running islet containers
   $SCRIPT_NAME mv <old> <new>       Rename an agent (config key + data folder)
   $SCRIPT_NAME update               Refresh the islet command (re-run installer)
-  $SCRIPT_NAME ps                   List running islet containers
   $SCRIPT_NAME rm [name]            Remove an agent, or uninstall islet
   $SCRIPT_NAME --help               Show this help message
-
-first run (no setup yet):
-  $SCRIPT_NAME opencode [workspace]   (also: opencode-v2, pi, hermes)
-    if <agent> is not in config.json yet, its harness image is built on
-    the fly from the factory Dockerfile (then the Dockerfile is deleted)
-    and `islet setup` runs for it — then the agent starts. If <agent> is
-    already configured, it just runs.
-
-setup:
-  Five steps, each with a default (agent name, image, preinstall
-  environment, network, environment); the entry is merged into
-  config.json ("preinstall" included — see run below).
-  Persistence is per agent folder: ~/.config/islet/<name>/ mounts
-  deps/, config/ and sessions/ into the container automatically —
-  config.json needs no volume keys.
-  Flags skip steps: --name <agent>, --image <img>,
-  --preinstall <a,b,...>, --config-volume <dir>, --network <host|bridge>,
-  --env <KEY=V[,K2=V2]>
-  (see README "Adding an agent to config.json")
-
-build:
-  docker build -t islet/<agent>:latest -f <file> <dir>
-  (manual route: generate a Dockerfile with "create", tag the image and
-  point the config entry's "image" at it)
 
 Run:
   name        agent name (default: the "container" from config)
   workspace   directory to mount at /workspace (default: current dir);
               arguments are order-free
+
+  Agent aliases opencode / opencode-v2 / opencode2 / pi / hermes: if the
+  alias is not in config.json yet, its harness image is built on the fly
+  from the factory Dockerfile (then deleted) and the setup wizard runs
+  for it — then the agent starts. If <agent> is already configured, it
+  just runs.
+  Any other name that is not in config.json offers to create the agent
+  ("Agent <name> not found. Create new? (y/N)"); on yes islet asks for
+  the base agent (opencode / opencode v2 / pi / hermes) and performs
+  the same build +
+  setup steps as the aliases above, under the typed name. Anything but
+  y aborts.
+  --config-dir <dir>
+              template agent config dir: validated, then copied into the
+              fresh agent config dir (~/.config/islet/<name>/config)
+              when the agent is first created
+  -v host_path:container[,host2:container2,...]
+              extra bind mounts for this run (e.g. ~/.ssh:/root/.ssh:ro);
+              comma-separated, mounted in addition to config.json volumes
+
   On the first run the "preinstall" list from config.json is baked into a
   per-agent derived image (islet-pre:<name>-<keyed hash>; rebuilt only when
   deps or the base image change).
@@ -96,18 +89,14 @@ Run:
     sessions/      — saved sessions/auth data dir, mounted at the agent's
                      data dir; survive --rm runs and Docker restarts
     volume_libs / volume_config / volume_sessions in config.json override
-    the corresponding dirs (or use --config-volume at setup)
-  -v host_path:container_path[,host2:container2,...]
-              extra bind mounts for this run (e.g. ~/.ssh:/root/.ssh:ro);
-              comma-separated, mounted in addition to config.json volumes
+    the corresponding dirs
 
 Examples:
-  $SCRIPT_NAME create my.dockerfile  # generate a Dockerfile
-  $SCRIPT_NAME build my.dockerfile   # docker build
-  $SCRIPT_NAME                       # default agent, current directory
-  $SCRIPT_NAME opencode ~/project    # run the "opencode" agent
-  $SCRIPT_NAME rm opencode           # remove the "opencode" agent entry
-  $SCRIPT_NAME rm                    # uninstall: remove config + islet command
+  $SCRIPT_NAME                        # default agent, current directory
+  $SCRIPT_NAME opencode ~/project     # run (or create) the "opencode" agent
+  $SCRIPT_NAME myagent ~/project      # unknown: offers to create it
+  $SCRIPT_NAME rm opencode            # remove the "opencode" agent entry
+  $SCRIPT_NAME rm                     # uninstall: remove config + islet command
 EOF
 }
 
@@ -244,11 +233,13 @@ build_agent_image() {
 }
 
 run_agent() {
-  local name='' workspace='' volumes_arg=''
+  local name='' workspace='' volumes_arg='' config_dir_arg=''
 
   # Flexible arguments: an existing directory is the workspace,
   # anything else is treated as an agent name. Order doesn't matter.
-  # Options: -v host:container[,host2:container2,...] — extra bind mounts.
+  # Options: -v host:container[,host2:container2,...] — extra bind mounts;
+  # --config-dir <dir> — template agent config dir, used when the agent is
+  # created on the fly (applied by the setup wizard).
   local arg
   while (($#)); do
     arg="$1"
@@ -260,6 +251,12 @@ run_agent() {
       shift
       ;;
     -v=* | --volume=*) volumes_arg="${arg#*=}" ;;
+    --config-dir)
+      [[ -n "${1:-}" ]] || die "--config-dir requires a template directory path"
+      config_dir_arg="$1"
+      shift
+      ;;
+    --config-dir=*) config_dir_arg="${arg#*=}" ;;
     *)
       if [[ -d "$arg" ]]; then
         [[ -z "$workspace" ]] || die "multiple workspaces given: '$workspace' and '$arg'"
@@ -289,27 +286,64 @@ run_agent() {
   fi
 
   if ! jq -e --arg b "$name" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
-    # Not configured (yet). If the name is a supported platform alias
-    # (opencode / opencode-v2 / opencode2 / pi / hermes) the agent is
-    # created right here, on the spot: build its harness image, run
-    # `islet setup` for it, and continue the run with the new entry.
-    # "opencode-v2" normalizes to the canonical name "opencode2".
+    # Not configured (yet). A supported platform alias (opencode /
+    # opencode-v2 / opencode2 / pi / hermes) creates the agent right here:
+    # build its harness image, run the setup wizard, continue the run.
+    # Any other unknown name asks first ("Create new?"), then does the
+    # same flow after a base agent is chosen (opencode / opencode v2 /
+    # pi / hermes).
     local kind
     kind="$(agent_alias_kind "$name")"
     if [[ -z "$kind" ]]; then
-      local available
-      available="$(cfg_get '.agent // {} | keys | join(", ")')"
-      die "unknown agent: $name (available: ${available:-none})"
-    fi
-    if [[ "$kind" != "$name" ]] &&
-      jq -e --arg b "$kind" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
-      name="$kind" # alias already configured under its canonical name
-    else
+      local ans
+      printf '%sAgent %s%s%s not found in %s. Create new? (y/N)%s ' \
+        "$C_YELLOW" "$C_BOLD" "$name" "$C_RESET" "$ISLET_CONFIG" "$C_RESET" >&2
+      read -r ans || ans=''
+      if [[ ! "$ans" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+        local available
+        available="$(cfg_get '.agent // {} | keys | join(", ")')"
+        die "unknown agent: $name (available: ${available:-none})"
+      fi
+      [[ "$name" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$ ]] ||
+        die "invalid agent name: $name (letters, digits, . _ - only)"
+
+      printf '%sChoose the base agent for %s%s\n' "$C_BOLD" "$name" "$C_RESET" >&2
+      printf '  %s1)%s opencode\n' "$C_GREEN" "$C_RESET" >&2
+      printf '  %s2)%s opencode v2\n' "$C_GREEN" "$C_RESET" >&2
+      printf '  %s3)%s pi\n' "$C_GREEN" "$C_RESET" >&2
+      printf '  %s4)%s hermes\n' "$C_GREEN" "$C_RESET" >&2
+      local choice
+      choice="$(ask 'Select base agent' '1')"
+      case "$choice" in
+      1) kind='opencode' ;;
+      2) kind='opencode2' ;;
+      3) kind='pi' ;;
+      4) kind='hermes' ;;
+      *) die "invalid choice: $choice" ;;
+      esac
+    elif [[ "$kind" != "$name" ]]; then
+      # alias normalizes to its canonical name (opencode-v2 -> opencode2);
+      # if that is already configured, it just runs.
       name="$kind"
+    fi
+
+    # Still not configured -> create it: build the harness image, then the
+    # setup wizard for the entry (typed or canonical name).
+    if ! jq -e --arg b "$name" '.agent | has($b)' "$ISLET_CONFIG" >/dev/null; then
       local image
       image="$(build_agent_image "$kind")"
-      run_setup --name "$name" --image "$image"
+      local -a setup_args=(--name "$name" --image "$image")
+      [[ -n "$config_dir_arg" ]] && setup_args+=(--config-dir "$config_dir_arg")
+      run_setup "${setup_args[@]}"
+      config_dir_arg='' # consumed
     fi
+  fi
+
+  # --config-dir was given for an already-configured agent: creation-time
+  # only, so it has nothing to do here — say so and keep running.
+  if [[ -n "$config_dir_arg" ]]; then
+    printf '%s--config-dir only applies when the agent is first created; %s is already configured%s\n' \
+      "$C_YELLOW" "$name" "$C_RESET" >&2
   fi
 
   local base_image volume_libs volume_config volume_sessions network deps_dir
@@ -623,9 +657,9 @@ preinstall_pkgs() {
 
 # dockerfile_for <agent> — print a Dockerfile for the supported agents
 # (Alpine base: opencode/opencode v2 and hermes runtime installs, pi on
-# node:24-alpine). No preinstall deps here — those are picked in
-# `islet setup`, stored in config.json and baked into the derived image at
-# run time.
+# node:24-alpine). No preinstall deps here — those are picked in the
+# setup wizard, stored in config.json and baked into the derived image
+# at run time.
 dockerfile_for() {
   local agent="$1"
   shift
@@ -709,50 +743,6 @@ EOF
   esac
 }
 
-# run_create [file] — one interactive step: choose the agent
-# (opencode/pi/hermes). No preinstall selection here — deps are picked in
-# `islet setup` only, stored in config.json and baked into the derived
-# image on the next run.
-#   The Dockerfile is written to the given location: <file> is treated as
-#   a directory -> <dir>/<agent>.Dockerfile, or a filename -> used as-is.
-run_create() {
-  local target="${1:-}"
-
-  local agent
-  printf '%s==>%s Create Dockerfile\n' "$C_BOLD" "$C_RESET"
-
-  printf '%sStep 1: agent%s\n' "$C_BOLD" "$C_RESET" >&2
-  printf '  %s1)%s opencode\n' "$C_GREEN" "$C_RESET"
-  printf '  %s2)%s opencode v2\n' "$C_GREEN" "$C_RESET"
-  printf '  %s3)%s pi\n' "$C_GREEN" "$C_RESET"
-  printf '  %s4)%s hermes\n' "$C_GREEN" "$C_RESET"
-  local choice
-  choice="$(ask 'Select agent' '1')"
-  case "$choice" in
-  1) agent='opencode' ;;
-  2) agent='opencode2' ;;
-  3) agent='pi' ;;
-  4) agent='hermes' ;;
-  *) die "invalid choice: $choice" ;;
-  esac
-
-  local file="$target"
-  if [[ -z "$file" ]]; then
-    file="./${agent}.Dockerfile"
-  elif [[ -d "$file" ]]; then
-    file="${file%/}/${agent}.Dockerfile"
-  elif [[ ! "$file" =~ /[^/]+$ || "$file" =~ /$ ]]; then
-    die "invalid path: $target"
-  fi
-
-  mkdir -p "$(cd "$(dirname "$file")" && pwd)"
-  dockerfile_for "$agent" >"$file"
-  printf '%s✔ Dockerfile written to %s%s\n' "$C_GREEN" "$file" "$C_RESET"
-  printf '  preinstall deps are picked in %s setup%s (saved to config.json)\n' "$C_BOLD" "$C_RESET"
-  printf '  next: %s build %s\n' "$SCRIPT_NAME" "$file"
-  return 0
-}
-
 # run_deps_image <name> <base-image> [dep]... — bake the preinstall list into
 # a per-agent derived image, and arm the capture environment for runtime
 # installs (PATH prefixes, package-manager prefixes, apk wrapper). The tag is
@@ -794,11 +784,12 @@ RUN mkdir -p /usr/local/bin \
       'exec /sbin/apk --root /opt/islet-tools/alpine --initdb --no-cache "$@"' \
       > /usr/local/bin/apk \
   && chmod +x /usr/local/bin/apk
-ENV PATH="/opt/islet-tools/alpine/usr/bin:/opt/islet-tools/alpine/usr/sbin:/opt/islet-tools/bin:/opt/islet-tools/npm/bin:/opt/islet-tools/go/bin:/opt/islet-tools/pyuser/bin:/opt/islet-tools/gems/bin:/opt/islet-tools/cargo/bin:/root/.local/bin:${PATH}"
+ENV PATH="/opt/islet-tools/alpine/usr/bin:/opt/islet-tools/alpine/usr/sbin:/opt/islet-tools/alpine/sbin:/opt/islet-tools/alpine/bin:/opt/islet-tools/bin:/opt/islet-tools/npm/bin:/opt/islet-tools/go/bin:/opt/islet-tools/pyuser/bin:/opt/islet-tools/gems/bin:/opt/islet-tools/cargo/bin:/root/.local/bin:${PATH}"
 ENV NPM_CONFIG_PREFIX=/opt/islet-tools/npm
 ENV GOPATH=/opt/islet-tools/go
 ENV GEM_HOME=/opt/islet-tools/gems
 ENV PYTHONUSERBASE=/opt/islet-tools/pyuser
+ENV CARGO_HOME=/opt/islet-tools/cargo
 ENV LD_LIBRARY_PATH=/opt/islet-tools/alpine/usr/lib:/opt/islet-tools/alpine/lib
 CAPTURE
   } >"$df"
@@ -809,27 +800,101 @@ CAPTURE
   printf '%s' "$tag"
 }
 
-# run_build [file] — docker build the given Dockerfile and tag the image
-# after the Dockerfile name (without .Dockerfile suffix): islet/<agent>:last.
-run_build() {
-  local file="${1:-}"
-  [[ -n "$file" ]] || die "usage: $SCRIPT_NAME build <path-to-Dockerfile>"
-  [[ -f "$file" ]] || die "Dockerfile not found: $file"
-
-  require_cmd docker
-
-  local agent tag dir
-  agent="$(basename "$file")"
-  agent="${agent%.Dockerfile}"
-  agent="${agent%.dockerfile}"
-  tag="islet/${agent}:latest"
-  dir="$(cd "$(dirname "$file")" && pwd)"
-
-  docker build -t "$tag" -f "$(cd "$dir" && realpath "$file")" "$dir"
-  printf '%s✔ Image built: %s%s%s\n' "$C_GREEN" "$C_BOLD" "$tag" "$C_RESET"
+# jsonc_strip_comments — whitespace-preserving stream that removes // line
+# comments and /* ... */ block comments (string-aware: // inside "..." or
+# escaped quotes is kept). Used only to validate .jsonc config templates —
+# the template files themselves are copied verbatim.
+jsonc_strip_comments() {
+  awk '
+  {
+    line = $0; out = ""
+    j = 1; n = length(line)
+    while (j <= n) {
+      c = substr(line, j, 1)
+      if (in_block) {
+        if (c == "*" && substr(line, j + 1, 1) == "/") { in_block = 0; j += 2 }
+        else { j++ }
+        continue
+      }
+      if (c == "\"") {
+        out = out c; j++
+        while (j <= n) {
+          cc = substr(line, j, 1)
+          out = out cc; j++
+          if (cc == "\\") { out = out substr(line, j, 1); j++ }
+          else if (cc == "\"") { break }
+        }
+        continue
+      }
+      if (c == "/" && substr(line, j + 1, 1) == "/") { break }
+      if (c == "/" && substr(line, j + 1, 1) == "*") { in_block = 1; j += 2; continue }
+      out = out c; j++
+    }
+    print out
+  }'
+  return 0
 }
 
-# run_setup — interactive wizard adding a new agent entry into config.json:
+# file_json_ok <file> — true when <file> is parseable JSON (.json) or
+# JSONC (.jsonc, comments stripped first, still via jq).
+file_json_ok() {
+  local f="$1"
+  if [[ "$f" == *.jsonc ]]; then
+    jq -e . 2>/dev/null >/dev/null < <(jsonc_strip_comments <"$f")
+  else
+    jq -e . 2>/dev/null >/dev/null "$f"
+  fi
+}
+
+# agent_kind_from_image <image> [fallback] — best-effort agent kind for
+# template validation: "opencode" images may hold opencode.json(c) —
+# pi/hermes keep arbitrary config trees. Unknown images fall back to the
+# agent name (generic checks only).
+agent_kind_from_image() {
+  local image="$1" fallback="${2:-}"
+  case "$image" in
+  *opencode*) printf 'opencode' ;;
+  *pi*) printf 'pi' ;;
+  *hermes*) printf 'hermes' ;;
+  *) printf '%s' "$fallback" ;;
+  esac
+}
+
+# validate_template_dir <kind> <dir> — check that a --config-dir template
+# agent dir is correct before it is copied into the fresh agent config dir:
+#   - the directory must exist and not be empty
+#   - opencode templates must contain opencode.json or opencode.jsonc
+#   - every *.json / *.jsonc (also hidden) must parse via jq
+# Dies with a clear message on the first problem found.
+validate_template_dir() {
+  local kind="$1" dir="$2"
+
+  [[ -d "$dir" ]] || die "config-dir: template directory not found: $dir"
+  [[ -n "$(ls -A "$dir" 2>/dev/null)" ]] ||
+    die "config-dir: template directory is empty: $dir"
+
+  if [[ "$kind" == 'opencode' ]]; then
+    # opencode starts from opencode.json / opencode.jsonc (comments are
+    # allowed in .jsonc — stripped before the jq validation).
+    local cfg_file="$dir/opencode.json"
+    [[ -f "$cfg_file" ]] || cfg_file="$dir/opencode.jsonc"
+    [[ -f "$cfg_file" ]] ||
+      die "config-dir: opencode template needs opencode.json or opencode.jsonc in $dir"
+    file_json_ok "$cfg_file" ||
+      die "config-dir: invalid JSON in $cfg_file"
+  fi
+
+  local g
+  for g in "$dir"/*.json "$dir"/.*.json "$dir"/*.jsonc "$dir"/.*.jsonc; do
+    [[ -f "$g" ]] || continue
+    file_json_ok "$g" ||
+      die "config-dir: invalid JSON in $g"
+  done
+  return 0
+}
+
+# run_setup — the setup wizard for the create-on-the-spot flow
+# (`islet <agent>` with an unconfigured agent, run from run_agent):
 #   step 1: agent name           (default: agent)
 #   step 2: image                (default: ghcr.io/anomalyco/opencode:latest)
 #   step 3: preinstall env       (multi-select, saved as .preinstall)
@@ -848,7 +913,7 @@ run_setup() {
 
   # --- flags: fill values without the TUI --------------------------------
   local opt_name='' opt_image='' opt_preinstall='' opt_config_volume=''
-  local opt_network='' opt_env=''
+  local opt_network='' opt_env='' opt_config_dir=''
   local opt_usage='setup [flags]
 flags:
   --name <agent>              step 1
@@ -856,10 +921,14 @@ flags:
   --preinstall <a,b,...>      step 3 (Git,Node.js,Go,Java,Python,Rust,Ruby,C/C++)
   --config-volume <dir>       step 4 (host dir mounted as agent config)
   --network <host|bridge>     step 5
-  --env <KEY=V[,KEY2=V2]>     step 6'
+  --env <KEY=V[,KEY2=V2]>     step 6
+  --config-dir <template-dir> template agent config dir: validated and
+                              copied into the fresh agent config dir
+                              (~/.config/islet/<name>/config or the
+                              --config-volume override)'
   while (($#)); do
     case "$1" in
-    --name | --image | --preinstall | --config-volume | --network | --env)
+    --name | --image | --preinstall | --config-volume | --network | --env | --config-dir)
       [[ -n "${2:-}" ]] || die "missing value for $1
 $opt_usage"
       local flag="$1"
@@ -870,6 +939,7 @@ $opt_usage"
       --config-volume) opt_config_volume="$2" ;;
       --network) opt_network="$2" ;;
       --env) opt_env="$2" ;;
+      --config-dir) opt_config_dir="$2" ;;
       esac
       shift 2
       ;;
@@ -884,20 +954,26 @@ $opt_usage"
     esac
   done
 
-  step_header 1 'Agent name'
   local name
   if [[ -n "$opt_name" ]]; then
     name="$opt_name"
   else
+    step_header 1 'Agent name'
     name="$(ask 'Agent name' 'agent')"
   fi
 
-  step_header 2 'Image'
   local image
   if [[ -n "$opt_image" ]]; then
     image="$opt_image"
   else
+    step_header 2 'Image'
     image="$(ask 'Docker image' "$OPENCODE_IMAGE_DEFAULT")"
+  fi
+
+  # --config-dir: the template is checked before anything is written, so a
+  # wrong template aborts setup instead of seeding a broken config.
+  if [[ -n "$opt_config_dir" ]]; then
+    validate_template_dir "$(agent_kind_from_image "$image" "$name")" "$opt_config_dir"
   fi
 
   step_header 3 'Preinstall environment'
@@ -925,7 +1001,6 @@ $opt_usage"
   local volume_config=''
   [[ -n "$opt_config_volume" ]] && volume_config="$opt_config_volume"
 
-  step_header 4 'Network'
   local network
   if [[ -n "$opt_network" ]]; then
     case "$opt_network" in
@@ -933,6 +1008,7 @@ $opt_usage"
     *) die "invalid --network value: $opt_network (host|bridge)" ;;
     esac
   else
+    step_header 4 'Network'
     printf '  %s1)%s host (default)\n' "$C_GREEN" "$C_RESET"
     printf '  %s2)%s bridge (publish ports in config.json)\n' "$C_YELLOW" "$C_RESET"
     printf -v network '%s' "$(ask 'Select' '1')"
@@ -942,7 +1018,6 @@ $opt_usage"
     esac
   fi
 
-  step_header 5 'Environment variables'
   local -a env_pairs=()
   local env_input="$opt_env"
   if [[ -n "$opt_env" ]]; then
@@ -953,6 +1028,7 @@ $opt_usage"
 Example: API_KEY=secret,FOO=bar"
     fi
   else
+    step_header 5 'Environment variables'
     while true; do
       env_input="$(ask 'Environment variables (KEY=VALUE,KEY=VALUE — empty to skip)')"
       [[ -z "$env_input" ]] && break
@@ -1013,6 +1089,24 @@ Example: API_KEY=secret,FOO=bar"
 
   printf '%s✔ Agent %s%s%s saved to %s%s\n' \
     "$C_GREEN" "$C_BOLD" "$name" "$C_RESET" "$ISLET_CONFIG" "$C_RESET"
+
+  # --config-dir: copy the validated template agent dir into the agent's
+  # persistent config dir (the default config folder or the --config-volume
+  # override). An already-populated config dir is never clobbered.
+  if [[ -n "$opt_config_dir" ]]; then
+    local seed_dir="${volume_config:-${ISLET_CONFIG_DIR}/${name}/config}"
+    seed_dir="${seed_dir/#\~/$HOME}"
+    if [[ -d "$seed_dir" && -n "$(ls -A "$seed_dir" 2>/dev/null)" ]]; then
+      printf '%s  config: %s already populated — template not copied%s\n' \
+        "$C_YELLOW" "$seed_dir" "$C_RESET"
+    else
+      mkdir -p "$seed_dir"
+      cp -a "${opt_config_dir%/}/." "$seed_dir/"
+      printf '  config: template copied to %s%s%s\n' \
+        "$C_BOLD" "$seed_dir" "$C_RESET"
+    fi
+  fi
+
   if ((${#preinstall[@]} > 0)); then
     printf '  preinstall: %s\n' "${preinstall[*]}"
   fi
@@ -1081,18 +1175,6 @@ main() {
   case "${1:-}" in
   -h | --help | help)
     print_help
-    ;;
-  create)
-    shift
-    run_create "$@"
-    ;;
-  build)
-    shift
-    run_build "$@"
-    ;;
-  setup)
-    shift
-    run_setup "$@"
     ;;
   ps)
     shift
