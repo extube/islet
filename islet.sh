@@ -741,18 +741,19 @@ EOF
 # run_deps_image <name> <base-image> [dep]... — bake the preinstall list into
 # a per-agent derived image, and arm the capture environment for runtime
 # installs (PATH prefixes, package-manager prefixes, apk wrapper). The tag is
-# keyed by a hash of base image + dep list, so Docker's cache keeps it across
-# runs; it is rebuilt only when the deps or the base image change.
+# keyed by a hash of base image + dep list + wrapper revision, so Docker's
+# cache keeps it across runs; it is rebuilt only when the deps, the base
+# image, or the wrapper (CAPTURE block) change.
 run_deps_image() {
   local name="$1" base="$2"
   shift 2
 
-  local depkey tag pkg deps_desc
+  local depkey tag pkg deps_desc wrapper_rev="2" # bump wrapper_rev when the CAPTURE block changes
   local -a pkgs=()
   for pkg in $(preinstall_pkgs "$@"); do pkgs+=("$pkg"); done
   deps_desc="$*"
 
-  depkey="$(printf '%s|%s' "$base" "$deps_desc" | sha256sum | cut -c1-10)"
+  depkey="$(printf '%s|%s|wrapper-v%s' "$base" "$deps_desc" "$wrapper_rev" | sha256sum | cut -c1-10)"
   tag="islet-pre:${name}-${depkey}"
 
   if docker image inspect "$tag" >/dev/null 2>&1; then
@@ -776,7 +777,23 @@ run_deps_image() {
 RUN mkdir -p /usr/local/bin \
   && printf '%s\n' \
       '#!/bin/sh' \
-      'exec /sbin/apk --root /opt/islet-tools/alpine --initdb --no-cache "$@"' \
+      '# islet apk wrapper — install packages into the persistent deps' \
+      '# rootfs (/opt/islet-tools/alpine) so they survive container rebuilds.' \
+      'root=/opt/islet-tools/alpine' \
+      'cache=/opt/islet-tools/apk-cache' \
+      '# apk-tools 3: --initdb is only valid for DB-mutating applets (add, del,' \
+      '# fix, upgrade) and is rejected by search/info/update — so never pass it' \
+      '# blindly. Instead, bootstrap database + repo config on first use.' \
+      'mkdir -p "$root" "$cache"' \
+      'if [ ! -f "$root/etc/apk/repositories" ]; then' \
+      '  mkdir -p "$root/etc/apk/keys"' \
+      '  cp /etc/apk/repositories "$root/etc/apk/" 2>/dev/null || true' \
+      '  cp /etc/apk/keys/* "$root/etc/apk/keys/" 2>/dev/null || true' \
+      'fi' \
+      'if [ ! -f "$root/lib/apk/db/installed" ]; then' \
+      '  /sbin/apk --root "$root" --cache-dir "$cache" --initdb add >/dev/null 2>&1 || true' \
+      'fi' \
+      'exec /sbin/apk --root "$root" --cache-dir "$cache" "$@"' \
       > /usr/local/bin/apk \
   && chmod +x /usr/local/bin/apk
 ENV PATH="/opt/islet-tools/alpine/usr/bin:/opt/islet-tools/alpine/usr/sbin:/opt/islet-tools/alpine/sbin:/opt/islet-tools/alpine/bin:/opt/islet-tools/bin:/opt/islet-tools/npm/bin:/opt/islet-tools/go/bin:/opt/islet-tools/pyuser/bin:/opt/islet-tools/gems/bin:/opt/islet-tools/cargo/bin:/root/.local/bin:${PATH}"
